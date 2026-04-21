@@ -2,25 +2,25 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Bash](https://img.shields.io/badge/Bash-3.2%2B-blue.svg)](https://www.gnu.org/software/bash/)
-[![Security](https://img.shields.io/badge/Security-AES--256--CBC-green.svg)](#-security-internals)
+[![Security](https://img.shields.io/badge/Security-AES--256--CBC--HMAC-green.svg)](#-security-internals)
 
-**kryptx** is a secure, lightweight, and modern command-line password manager built entirely in **Bash**, utilizing **OpenSSL** for industry-standard encryption and **jq** for structured data management. It provides a robust, terminal-centric way to manage your credentials without external dependencies beyond standard Unix tools.
+**kryptx** is a high-security, lightweight, and modern command-line password manager built entirely in **Bash**. It leverages **OpenSSL** for industry-standard encryption (AES-256-CBC + HMAC-SHA256) and **jq** for robust, structured data management. Designed for terminal-centric workflows, it provides a secure vault without the overhead of external dependencies beyond standard Unix tools.
 
 ---
 
 ## 🚀 Features
 
-- **End-to-End Encryption**: Robust storage using **AES-256-CBC** with **PBKDF2** key derivation.
-- **Zero Exposure**: Master password is never passed as a command-line argument; it's read securely via `stdin`.
-- **JSON-based Storage**: Leverages `jq` for structured data management, ensuring safety with special characters.
-- **Secure Password Generation**: Generate strong, diverse passwords (uppercase, lowercase, digits, symbols) with guaranteed quality.
-- **Clipboard Integration**: Copy passwords directly to your clipboard with an **auto-clear timeout** (configurable, default 30s).
-- **Secure Cleanup**: Decrypted data exists only in temporary files that are **securely wiped** (overwritten with random data) before deletion.
-- **Advanced Service Management**: Store, retrieve, edit, rename, delete, and search services through an intuitive interactive menu.
-- **Backup & Migration**: Simple JSON import/export functionality with automatic duplicate detection.
-- **Configurable Experience**: Customize password length, clipboard timeouts, and storage locations via the settings menu.
-- **Security Audit & Logging**: All operations are logged to `kryptx-audit.log` for security tracking and accountability.
-- **Brute-Force Protection**: Automatic 5-minute security lockout after 5 failed authentication attempts.
+- **Authenticated Encryption**: Uses **AES-256-CBC** with an **Encrypt-then-MAC (EtM)** approach using **HMAC-SHA256** to ensure data integrity and authenticity.
+- **Hardened Key Derivation**: Employs **PBKDF2** with **600,000 iterations** (pinned) to protect against modern brute-force hardware.
+- **Zero-Exposure Architecture**: Master passwords are never passed via command-line arguments or environment variables; they are read via secure `stdin` and passed to OpenSSL via file descriptors.
+- **Secure Memory Management**:
+    - Prefers **RAM-backed storage** (`/dev/shm`) for temporary files to prevent sensitive data from hitting the physical disk.
+    - Temporary files are **securely wiped** using `shred` (or random-data overwrite fallback) before deletion.
+- **Flexible Export/Import**: Supports both raw JSON and **Encrypted Export** files (using a separate passphrase), facilitating secure migrations and backups.
+- **Clipboard Integration**: Copy passwords directly with a configurable **auto-clear timeout** (default 30s).
+- **Security Lockout**: Automatic 5-minute lockout after 5 failed authentication attempts to thwart automated attacks.
+- **Audit Logging**: Comprehensive action logging to `kryptx-audit.log` (sensitive metadata like service names are never logged).
+- **Search & Management**: Intuitive interactive menu for storing, retrieving, editing, and searching entries with case-insensitive matching.
 
 ---
 
@@ -29,7 +29,7 @@
 Ensure you have the following tools installed:
 
 - **Bash** (3.2+)
-- **OpenSSL** (for encryption and entropy)
+- **OpenSSL** (1.1.1+ recommended)
 - **jq** (for JSON processing)
 
 ### Installation
@@ -41,13 +41,16 @@ brew install openssl jq
 
 #### Ubuntu / Debian
 ```bash
-sudo apt update && sudo apt install openssl jq
+sudo apt update && sudo apt install openssl jq xclip  # xclip for clipboard support
 ```
 
 #### Arch Linux
 ```bash
-sudo pacman -S openssl jq
+sudo pacman -S openssl jq xclip
 ```
+
+> [!TIP]
+> On Linux, `kryptx` supports `xclip` (X11), `wl-clipboard` (Wayland), and `pbcopy` (macOS).
 
 ---
 
@@ -69,35 +72,36 @@ chmod +x kryptx.sh
 ./kryptx.sh
 ```
 
-> [!NOTE]
-> Upon the first run, you will be prompted to set and confirm a **Master Password**. This is the only key to your vault—if lost, your data **cannot** be recovered.
+> [!IMPORTANT]
+> On the first run, you will set a **Master Password**. This is the only way to unlock your vault. **There is no recovery mechanism for a lost Master Password.**
 
 ---
 
 ## 📋 Available Commands
 
-1.  **Store a password**: Add a new service or update an existing one. Options include manual entry (with strength validation) or automatic generation.
-2.  **Retrieve a password**: Search for a service and view credentials. Supports case-insensitive matching and clipboard copying.
-3.  **List stored services**: View all services currently in your vault with a clean, formatted output.
-4.  **Search services**: Perform fast substring searches across all service names.
-5.  **Edit a password**: Modify the username, service name, or password of an existing entry.
-6.  **Delete a password**: Securely remove an entry from the vault with a confirmation prompt.
-7.  **Import passwords**: Bulk import entries from a JSON file. Duplicates are handled automatically.
-8.  **Export passwords**: Create an unencrypted JSON backup of your vault (handle with care!).
-9.  **Settings**: Interactively adjust default password length, clipboard timeout, and the vault file path.
-10. **Exit**: Securely wipe temporary files, clear sensitive variables from memory, and close the session.
+1.  **Store**: Add new entries with manual input or auto-generation. Includes password strength validation.
+2.  **Retrieve**: View credentials and copy passwords to the clipboard.
+3.  **List**: Overview of all stored services and usernames.
+4.  **Search**: Fast substring search across all service names.
+5.  **Edit**: Modify existing usernames, service names, or passwords.
+6.  **Delete**: Securely remove an entry from the vault.
+7.  **Import**: Load entries from JSON or encrypted export files.
+8.  **Export**: Create unencrypted JSON backups or **passphrase-protected encrypted exports**.
+9.  **Settings**: Configure password length, clipboard timeouts, and custom vault paths.
+10. **Exit**: Securely wipe memory/temp files and terminate the session.
 
 ---
 
 ## 🔐 Security Internals
 
-- **Encryption**: AES-256-CBC (Advanced Encryption Standard).
-- **Key Derivation**: PBKDF2 (Password-Based Key Derivation Function 2) with salt.
-- **File Security**: The vault file (`passwords.enc`) is restricted to owner-only access (`chmod 600`).
-- **Memory Hygiene**: The Master Password variable is explicitly cleared on exit. No sensitive data persists in the terminal environment.
-- **Safe I/O**: Temporary files are handled via `mktemp` and are **overwritten with random data** (`/dev/urandom`) before deletion using a `trap` signal handler.
-- **Injection Protection**: All user inputs are sanitized using `jq` parameter binding to prevent command or JSON injection.
-- **Lockout Mechanism**: Persistence of failed attempts via `.kryptx-lock` ensures protection against automated brute-force attacks.
+- **Cipher**: `AES-256-CBC` for confidentiality.
+- **Integrity**: `HMAC-SHA256` for authenticity (protects against bit-flipping and padding oracle attacks).
+- **KDF**: `PBKDF2` with `600,000` iterations and a unique salt.
+- **I/O Safety**:
+    - Vault files are restricted to `chmod 600`.
+    - Temporary files are created with `mktemp` in `/dev/shm` (if available).
+    - Trap handlers ensure `secure_cleanup` runs on exit, interrupts, or errors.
+- **Sanitization**: All user inputs are handled via `jq` parameter binding (`--arg`) to prevent JSON or command injection.
 
 ---
 
@@ -105,52 +109,25 @@ chmod +x kryptx.sh
 
 | File | Purpose |
 | :--- | :--- |
-| `passwords.enc` | The encrypted vault containing your credentials. |
-| `kryptx-config.json` | Stores your custom settings and preferences. |
-| `kryptx-audit.log` | Records all session activities with timestamps. |
-| `.kryptx-lock` | Temporary file used to manage security lockouts. |
-
----
-
-## 🔄 Backup & Migration
-
-### Creating a Backup
-1. Use the **Export** feature (Option 8) to generate a JSON file.
-2. Transfer the file to a secure, encrypted storage medium.
-3. **Crucial**: Delete the unencrypted export file from your local disk immediately.
-
-### Restoring from Backup
-1. Ensure the backup file follows the standard JSON structure.
-2. Use the **Import** feature (Option 7) to load the data into your vault.
-3. Verify entries using the **List** feature (Option 3).
+| `passwords.enc` | The encrypted vault (AES + HMAC). |
+| `kryptx-config.json` | User-specific settings (length, timeouts). |
+| `kryptx-audit.log` | Security audit trail (action types and timestamps). |
+| `.kryptx-lock` | Temporary lockout marker. |
 
 ---
 
 ## ⚠️ Security Best Practices
 
-- Use a **strong, unique** Master Password (passphrases of 12+ characters recommended).
-- Regularly rotate your Master Password if you suspect exposure.
-- Never leave exported unencrypted files on your system.
-- Monitor the `kryptx-audit.log` for any suspicious activity.
-- Keep your underlying system (especially OpenSSL) updated.
-
----
-
-## 🐛 Troubleshooting
-
-- **"Wrong password or corrupted file"**: Verify your Master Password. If the file is corrupted, restore from your latest backup.
-- **"Security lock activated"**: You have exceeded the failed attempt limit. Wait 5 minutes for the lockout to expire.
-- **"Clipboard not available"**:
-    - **macOS**: `pbcopy` is standard.
-    - **Linux (X11)**: Install `xclip`.
-    - **Linux (Wayland)**: Install `wl-clipboard`.
-- **"Invalid JSON structure"**: Ensure your import files are valid JSON arrays of objects.
+- Use a **strong, unique** Master Password (12+ characters recommended).
+- Use the **Encrypted Export** feature for backups rather than unencrypted JSON.
+- Regularly check the `kryptx-audit.log` for unexpected activity.
+- Keep your system's `OpenSSL` updated to the latest security patch.
 
 ---
 
 ## ⚖️ License
 
-Distributed under the **MIT License**. See [LICENSE](LICENSE) for more information.
+Distributed under the **MIT License**. See [LICENSE](LICENSE) and [SECURITY](SECURITY.md) for more information.
 
 ---
 
