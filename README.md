@@ -14,8 +14,8 @@
 - **Hardened Key Derivation**: Employs **PBKDF2** with **600,000 iterations** (pinned) to protect against modern brute-force hardware.
 - **Zero-Exposure Architecture**: Master passwords are never passed via command-line arguments or environment variables; they are read via secure `stdin` and passed to OpenSSL via file descriptors.
 - **Secure Memory Management**:
-    - Prefers **RAM-backed storage** (`/dev/shm`) for temporary files to prevent sensitive data from hitting the physical disk.
-    - Temporary files are **securely wiped** using `shred` (or random-data overwrite fallback) before deletion.
+  - Prefers **RAM-backed storage** (`/dev/shm`) for temporary files to prevent sensitive data from hitting the physical disk.
+  - Temporary files are **securely wiped** using `shred` (or random-data overwrite fallback) before deletion.
 - **Flexible Export/Import**: Supports both raw JSON and **Encrypted Export** files (using a separate passphrase), facilitating secure migrations and backups.
 - **Clipboard Integration**: Copy passwords directly with a configurable **auto-clear timeout** (default 30s).
 - **Security Lockout**: Automatic 5-minute lockout after 5 failed authentication attempts to thwart automated attacks.
@@ -35,16 +35,19 @@ Ensure you have the following tools installed:
 ### Installation
 
 #### macOS
+
 ```bash
 brew install openssl jq
 ```
 
 #### Ubuntu / Debian
+
 ```bash
 sudo apt update && sudo apt install openssl jq xclip  # xclip for clipboard support
 ```
 
 #### Arch Linux
+
 ```bash
 sudo pacman -S openssl jq xclip
 ```
@@ -57,17 +60,20 @@ sudo pacman -S openssl jq xclip
 ## 💻 Usage
 
 ### 1. Clone the repository
+
 ```bash
 git clone https://github.com/salvatorecorvaglia/kryptx.git
 cd kryptx
 ```
 
 ### 2. Make the script executable
+
 ```bash
 chmod +x kryptx.sh
 ```
 
 ### 3. Start managing passwords
+
 ```bash
 ./kryptx.sh
 ```
@@ -98,21 +104,21 @@ chmod +x kryptx.sh
 - **Integrity**: `HMAC-SHA256` for authenticity (protects against bit-flipping and padding oracle attacks).
 - **KDF**: `PBKDF2` with `600,000` iterations and a unique salt.
 - **I/O Safety**:
-    - Vault files are restricted to `chmod 600`.
-    - Temporary files are created with `mktemp` in `/dev/shm` (if available).
-    - Trap handlers ensure `secure_cleanup` runs on exit, interrupts, or errors.
+  - Vault files are restricted to `chmod 600`.
+  - Temporary files are created with `mktemp` in `/dev/shm` (if available).
+  - Trap handlers ensure `secure_cleanup` runs on exit, interrupts, or errors.
 - **Sanitization**: All user inputs are handled via `jq` parameter binding (`--arg`) to prevent JSON or command injection.
 
 ---
 
 ## 📂 Storage Structure
 
-| File | Purpose |
-| :--- | :--- |
-| `passwords.enc` | The encrypted vault (AES + HMAC). |
-| `kryptx-config.json` | User-specific settings (length, timeouts). |
-| `kryptx-audit.log` | Security audit trail (action types and timestamps). |
-| `.kryptx-lock` | Temporary lockout marker. |
+| File                 | Purpose                                             |
+| :------------------- | :-------------------------------------------------- |
+| `passwords.enc`      | The encrypted vault (AES + HMAC).                   |
+| `kryptx-config.json` | User-specific settings (length, timeouts).          |
+| `kryptx-audit.log`   | Security audit trail (action types and timestamps). |
+| `.kryptx-lock`       | Temporary lockout marker.                           |
 
 ---
 
@@ -134,4 +140,5 @@ Distributed under the **MIT License**. See [LICENSE](LICENSE) and [SECURITY](SEC
 ## 📝 Author
 
 **Salvatore Corvaglia**
+
 - GitHub: [@salvatorecorvaglia](https://github.com/salvatorecorvaglia)
