@@ -131,9 +131,21 @@ chmod +x kryptx.sh
 
 ---
 
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+---
+
 ## ⚖️ License
 
-Distributed under the **MIT License**. See [LICENSE](LICENSE) and [SECURITY](SECURITY.md) for more information.
+Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
+
+---
+
+## 🛡️ Security
+
+For information on security features and reporting vulnerabilities, please see our [Security Policy](SECURITY.md).
 
 ---
 
