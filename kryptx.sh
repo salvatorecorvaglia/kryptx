@@ -9,18 +9,26 @@ set -euo pipefail
 # Application directory (resilient to working directory changes)
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# XDG Base Directory Specification paths
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kryptx"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kryptx"
+
+# Ensure directories exist with strict permissions
+mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+chmod 700 "$CONFIG_DIR" "$DATA_DIR" 2>/dev/null || true
+
 # Encrypted password storage file (configurable via config)
-PASSWORD_FILE="$APP_DIR/passwords.enc"
+PASSWORD_FILE="$DATA_DIR/passwords.enc"
 
 # Audit log file
-AUDIT_LOG="$APP_DIR/kryptx-audit.log"
+AUDIT_LOG="$DATA_DIR/kryptx-audit.log"
 
 # Temp file for decrypted data — prefer RAM-backed tmpfs to avoid disk writes
 TEMP_FILE=""
 TEMP_FILES_TO_CLEAN=()
 
 # Configuration file
-CONFIG_FILE="$APP_DIR/kryptx-config.json"
+CONFIG_FILE="$CONFIG_DIR/kryptx-config.json"
 
 # Default password length
 DEFAULT_PASSWORD_LENGTH=16
@@ -34,6 +42,9 @@ MAX_FAILED_ATTEMPTS=5
 # Master password — cleared on exit
 MASTER_PASSWORD=""
 
+# HMAC key — derived via PBKDF2 and cached in memory, cleared on exit
+HMAC_KEY=""
+
 # Background PID for clipboard clear timer
 _CLIP_PID=""
 
@@ -44,6 +55,23 @@ PBKDF2_ITER=600000
 # ==============================================================================
 # Cleanup & Security Functions
 # ==============================================================================
+
+# Securely overwrite and delete a file
+secure_remove_file() {
+    local f="$1"
+    if [ -f "$f" ]; then
+        if command -v shred >/dev/null 2>&1; then
+            shred -u "$f" 2>/dev/null || rm -f "$f"
+        else
+            local size
+            size=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo "0")
+            if [ "$size" -gt 0 ] 2>/dev/null; then
+                dd if=/dev/urandom of="$f" bs=1 count="$size" conv=notrunc 2>/dev/null || true
+            fi
+            rm -f "$f"
+        fi
+    fi
+}
 
 # Secure cleanup: zero temp files, clear clipboard, kill background timers
 secure_cleanup() {
@@ -57,23 +85,12 @@ secure_cleanup() {
 
     # Securely overwrite and delete temp files
     for f in "${TEMP_FILES_TO_CLEAN[@]}"; do
-        if [ -f "$f" ]; then
-            # shred is the most reliable option; fall back to dd on macOS/BSD
-            if command -v shred >/dev/null 2>&1; then
-                shred -u "$f" 2>/dev/null || rm -f "$f"
-            else
-                local size
-                size=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo "0")
-                if [ "$size" -gt 0 ] 2>/dev/null; then
-                    dd if=/dev/urandom of="$f" bs=1 count="$size" conv=notrunc 2>/dev/null || true
-                fi
-                rm -f "$f"
-            fi
-        fi
+        secure_remove_file "$f"
     done
 
-    # Clear master password from shell memory
+    # Clear master password and HMAC key from shell memory
     MASTER_PASSWORD=""
+    HMAC_KEY=""
 }
 
 # Create temp file — prefer /dev/shm (RAM-backed) to avoid any disk write
@@ -100,12 +117,14 @@ trap secure_cleanup EXIT INT TERM
 # Load configuration from config file
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
-        DEFAULT_PASSWORD_LENGTH=$(jq -r '.password_length // 16' "$CONFIG_FILE")
-        CLIPBOARD_TIMEOUT=$(jq -r '.clipboard_timeout // 30' "$CONFIG_FILE")
-        local custom_password_file
-        custom_password_file=$(jq -r '.password_file // ""' "$CONFIG_FILE")
-        if [ -n "$custom_password_file" ]; then
-            PASSWORD_FILE="$custom_password_file"
+        if jq empty "$CONFIG_FILE" 2>/dev/null; then
+            DEFAULT_PASSWORD_LENGTH=$(jq -r '.password_length // 16' "$CONFIG_FILE" 2>/dev/null || echo "16")
+            CLIPBOARD_TIMEOUT=$(jq -r '.clipboard_timeout // 30' "$CONFIG_FILE" 2>/dev/null || echo "30")
+            local custom_password_file
+            custom_password_file=$(jq -r '.password_file // ""' "$CONFIG_FILE" 2>/dev/null || echo "")
+            if [ -n "$custom_password_file" ]; then
+                PASSWORD_FILE="$custom_password_file"
+            fi
         fi
     fi
 }
@@ -113,7 +132,7 @@ load_config() {
 # Save configuration to config file
 save_config() {
     local config_json
-    if [ -f "$CONFIG_FILE" ]; then
+    if [ -f "$CONFIG_FILE" ] && jq empty "$CONFIG_FILE" 2>/dev/null; then
         config_json=$(cat "$CONFIG_FILE")
     else
         config_json="{}"
@@ -124,9 +143,12 @@ save_config() {
         --argjson ct "${CLIPBOARD_TIMEOUT}" \
         --arg pf "$PASSWORD_FILE" \
         '.password_length = $pl | .clipboard_timeout = $ct | .password_file = $pf' \
-        > "$CONFIG_FILE.tmp"
-    mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
-    chmod 600 "$CONFIG_FILE"
+        > "$CONFIG_FILE.tmp" 2>/dev/null || rm -f "$CONFIG_FILE.tmp"
+
+    if [ -f "$CONFIG_FILE.tmp" ]; then
+        mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
+    fi
 }
 
 # Audit logging — records only action types, never service names or usernames,
@@ -170,7 +192,7 @@ check_password_strength() {
         [ -n "$warn_upper"  ] && printf '   Tip: Add uppercase letters\n'
         [ -n "$warn_lower"  ] && printf '   Tip: Add lowercase letters\n'
         [ -n "$warn_digit"  ] && printf '   Tip: Add digits\n'
-        [ -n "$warn_special"] && printf '   Tip: Add special characters\n'
+        [ -n "$warn_special" ] && printf '   Tip: Add special characters\n'
     fi
 
     return 0
@@ -190,7 +212,7 @@ check_password_strength() {
 
 # Derive an HMAC key distinct from the encryption key
 _hmac_key() {
-    echo -n "${MASTER_PASSWORD}:kryptx-hmac-v1"
+    echo -n "$HMAC_KEY"
 }
 
 # Encrypt TEMP_FILE → PASSWORD_FILE with HMAC integrity tag
@@ -207,7 +229,7 @@ encrypt_file() {
     TEMP_FILES_TO_CLEAN+=("$ct_file")
 
     # Encrypt — password via fd:3, never via argv
-    openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -salt \
+    openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -salt \
         -in "$TEMP_FILE" -pass fd:3 -out "$ct_file" 3<<<"$MASTER_PASSWORD" 2>/dev/null || {
         echo "❌ Encryption failed"
         audit_log "ENCRYPT_FAIL"
@@ -216,7 +238,7 @@ encrypt_file() {
 
     # Compute HMAC over the ciphertext (encrypt-then-MAC)
     local hmac
-    hmac=$(openssl dgst -sha256 -hmac "$(_hmac_key)" "$ct_file" | awk '{print $2}')
+    hmac=$(openssl dgst -sha256 -hmac "$(_hmac_key)" "$ct_file" | awk '{print $NF}')
 
     # Bundle as  hmac_hex:base64(ciphertext)
     local ct_b64
@@ -225,11 +247,7 @@ encrypt_file() {
     chmod 600 "$PASSWORD_FILE"
 
     # Securely remove intermediate ciphertext temp file
-    if command -v shred >/dev/null 2>&1; then
-        shred -u "$ct_file" 2>/dev/null || rm -f "$ct_file"
-    else
-        rm -f "$ct_file"
-    fi
+    secure_remove_file "$ct_file"
 }
 
 # Decrypt PASSWORD_FILE → TEMP_FILE, verifying the HMAC first
@@ -259,33 +277,25 @@ decrypt_file() {
 
     # Verify HMAC before decrypting to detect tampering
     local computed_hmac
-    computed_hmac=$(openssl dgst -sha256 -hmac "$(_hmac_key)" "$ct_file" | awk '{print $2}')
+    computed_hmac=$(openssl dgst -sha256 -hmac "$(_hmac_key)" "$ct_file" | awk '{print $NF}')
 
     if [ "$stored_hmac" != "$computed_hmac" ]; then
         echo "❌ Wrong password or vault has been tampered with"
         audit_log "DECRYPT_FAIL: HMAC mismatch"
-        # Zero and remove ciphertext temp file before exiting
-        if command -v shred >/dev/null 2>&1; then
-            shred -u "$ct_file" 2>/dev/null || rm -f "$ct_file"
-        else
-            rm -f "$ct_file"
-        fi
+        secure_remove_file "$ct_file"
         return 1
     fi
 
     # Decrypt — password via fd:3
-    openssl enc -d -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" \
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 \
         -in "$ct_file" -pass fd:3 -out "$TEMP_FILE" 3<<<"$MASTER_PASSWORD" 2>/dev/null || {
         echo "❌ Decryption failed"
         audit_log "DECRYPT_FAIL"
+        secure_remove_file "$ct_file"
         return 1
     }
 
-    if command -v shred >/dev/null 2>&1; then
-        shred -u "$ct_file" 2>/dev/null || rm -f "$ct_file"
-    else
-        rm -f "$ct_file"
-    fi
+    secure_remove_file "$ct_file"
 
     # Validate JSON structure
     if ! jq empty "$TEMP_FILE" 2>/dev/null; then
@@ -301,7 +311,7 @@ decrypt_file() {
 
 prompt_master_password() {
     local attempt=1
-    local lock_file="$APP_DIR/.kryptx-lock"
+    local lock_file="$DATA_DIR/.kryptx-lock"
 
     # Enforce lockout based on lock file mtime
     if [ -f "$lock_file" ]; then
@@ -321,7 +331,7 @@ prompt_master_password() {
 
     while [ "$attempt" -le "$MAX_FAILED_ATTEMPTS" ]; do
         printf "Enter your master password (attempt %d/%d):\n" "$attempt" "$MAX_FAILED_ATTEMPTS"
-        read -rs MASTER_PASSWORD
+        read -rs MASTER_PASSWORD || true
         echo ""
 
         if [ -z "$MASTER_PASSWORD" ]; then
@@ -329,6 +339,9 @@ prompt_master_password() {
             attempt=$((attempt + 1))
             continue
         fi
+
+        # Derive HMAC key using PBKDF2 over a static seed
+        HMAC_KEY=$(echo -n "kryptx-hmac-key-seed-v1" | openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -nosalt -pass fd:3 3<<<"$MASTER_PASSWORD" 2>/dev/null | base64 | tr -d '\n')
 
         if [ -f "$PASSWORD_FILE" ]; then
             # Try to decrypt; authenticate by HMAC match inside decrypt_file
@@ -338,22 +351,25 @@ prompt_master_password() {
             fi
             echo "❌ Wrong password or corrupted vault"
             audit_log "AUTH_FAIL: attempt $attempt/$MAX_FAILED_ATTEMPTS"
+            MASTER_PASSWORD=""
+            HMAC_KEY=""
         else
             # First run — confirm password
             echo "Confirm your master password:"
             local confirm=""
-            read -rs confirm
+            read -rs confirm || true
             echo ""
 
             # Constant-time-ish comparison via hashes to avoid trivial timing leaks
             local h1 h2
-            h1=$(printf '%s' "$MASTER_PASSWORD" | openssl dgst -sha256 | awk '{print $2}')
-            h2=$(printf '%s' "$confirm"          | openssl dgst -sha256 | awk '{print $2}')
+            h1=$(printf '%s' "$MASTER_PASSWORD" | openssl dgst -sha256 | awk '{print $NF}')
+            h2=$(printf '%s' "$confirm"          | openssl dgst -sha256 | awk '{print $NF}')
 
             if [ "$h1" != "$h2" ]; then
                 echo "❌ Passwords do not match"
                 audit_log "MISMATCH: confirmation failed"
                 MASTER_PASSWORD=""
+                HMAC_KEY=""
                 attempt=$((attempt + 1))
                 continue
             fi
@@ -361,11 +377,14 @@ prompt_master_password() {
             if [ "${#MASTER_PASSWORD}" -lt 8 ]; then
                 echo "❌ Master password must be at least 8 characters"
                 MASTER_PASSWORD=""
+                HMAC_KEY=""
                 attempt=$((attempt + 1))
                 continue
             fi
 
             audit_log "INIT: new vault created"
+            echo "[]" > "$TEMP_FILE"
+            encrypt_file
             return 0
         fi
 
@@ -399,14 +418,14 @@ generate_password() {
 
     while [ "${#password}" -lt "$length" ] && [ "$attempt" -lt "$max_attempts" ]; do
         local candidate
-        candidate=$(openssl rand -base64 256 | tr -dc "$charset" | head -c "$length")
+        candidate=$(LC_ALL=C tr -dc "$charset" < <(openssl rand 1000 2>/dev/null) | head -c "$length")
         [ "${#candidate}" -ge "$length" ] && password="$candidate"
         attempt=$((attempt + 1))
     done
 
     # Fallback
     if [ "${#password}" -lt "$length" ]; then
-        password=$(tr -dc "$charset" < /dev/urandom | head -c "$length")
+        password=$(LC_ALL=C tr -dc "$charset" < /dev/urandom | head -c "$length")
     fi
 
     # Ensure character-class diversity by replacing random positions using
@@ -415,7 +434,10 @@ generate_password() {
     if [ "$length" -ge 8 ]; then
         local arr=()
         # Split password into character array
-        while IFS= read -r -n1 c; do arr+=("$c"); done <<< "$password"
+        local i
+        for (( i=0; i<length; i++ )); do
+            arr+=("${password:i:1}")
+        done
         local arr_len=${#arr[@]}
 
         local has_upper has_lower has_digit
@@ -423,28 +445,32 @@ generate_password() {
         has_lower=$(printf '%s' "$password" | grep -c '[a-z]' || true)
         has_digit=$(printf '%s' "$password"  | grep -c '[0-9]' || true)
 
-        # Pick injection positions via openssl rand to keep entropy high
+        # Pick injection positions via raw openssl rand to keep entropy high (no base64 bias)
         local rand_positions
-        rand_positions=$(openssl rand -base64 16 | od -An -tu1 | tr ' ' '\n' | grep -v '^$' | head -4)
+        rand_positions=$(openssl rand 16 | od -An -tu1 | tr ' ' '\n' | grep -v '^$' | head -4)
         local pos_arr=()
         while IFS= read -r v; do pos_arr+=("$v"); done <<< "$rand_positions"
 
         local pi=0
         if [ "$has_upper" -eq 0 ]; then
             local idx=$(( ${pos_arr[$pi]:-0} % arr_len ))
-            arr[$idx]="ABCDEFGHIJKLMNOPQRSTUVWXYZ"$(( (${pos_arr[$pi]:-0} % 26) ))
-            # simpler: pick a fixed uppercase char seeded from random byte
-            arr[$idx]=$(printf '%b' "\\$(printf '%03o' $(( 65 + (${pos_arr[$pi]:-0} % 26) )) )")
+            local ch_idx=$(( ${pos_arr[$pi]:-0} % 26 ))
+            local uppers="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            arr[$idx]="${uppers:ch_idx:1}"
             pi=$((pi + 1))
         fi
         if [ "$has_lower" -eq 0 ]; then
             local idx=$(( ${pos_arr[$pi]:-1} % arr_len ))
-            arr[$idx]=$(printf '%b' "\\$(printf '%03o' $(( 97 + (${pos_arr[$pi]:-1} % 26) )) )")
+            local ch_idx=$(( ${pos_arr[$pi]:-1} % 26 ))
+            local lowers="abcdefghijklmnopqrstuvwxyz"
+            arr[$idx]="${lowers:ch_idx:1}"
             pi=$((pi + 1))
         fi
         if [ "$has_digit" -eq 0 ]; then
             local idx=$(( ${pos_arr[$pi]:-2} % arr_len ))
-            arr[$idx]=$(printf '%b' "\\$(printf '%03o' $(( 48 + (${pos_arr[$pi]:-2} % 10) )) )")
+            local ch_idx=$(( ${pos_arr[$pi]:-2} % 10 ))
+            local digits="0123456789"
+            arr[$idx]="${digits:ch_idx:1}"
             pi=$((pi + 1))
         fi
         if [ "$include_symbols" = true ]; then
@@ -454,7 +480,7 @@ generate_password() {
                 local syms='!@#$%^&*()_+-='
                 local idx=$(( ${pos_arr[$pi]:-3} % arr_len ))
                 local sym_idx=$(( ${pos_arr[$pi]:-3} % ${#syms} ))
-                arr[$idx]="${syms:$sym_idx:1}"
+                arr[$idx]="${syms:sym_idx:1}"
             fi
         fi
 
@@ -536,10 +562,11 @@ store_password() {
             ;;
         2)
             password=$(generate_password "$DEFAULT_PASSWORD_LENGTH")
-            # Do NOT echo the password to the terminal; offer clipboard instead
             echo "✅ Password generated."
             read -rp "Copy to clipboard? (y/n): " c
-            [ "$c" = "y" ] && copy_clipboard "$password"
+            if [ "$c" = "y" ]; then
+                copy_clipboard "$password" || true
+            fi
             ;;
         3)
             read -rp "Password length (default: $DEFAULT_PASSWORD_LENGTH): " length
@@ -553,29 +580,29 @@ store_password() {
                 [ "$force" != "y" ] && return
             fi
             read -rp "Include symbols? (y/n): " inc_sym
-            [ "$inc_sym" = "y" ] && password=$(generate_password "$length" true) \
-                                 || password=$(generate_password "$length" false)
+            if [ "$inc_sym" = "y" ]; then
+                password=$(generate_password "$length" true)
+            else
+                password=$(generate_password "$length" false)
+            fi
             echo "✅ Password generated."
             read -rp "Copy to clipboard? (y/n): " c
-            [ "$c" = "y" ] && copy_clipboard "$password"
+            if [ "$c" = "y" ]; then
+                copy_clipboard "$password" || true
+            fi
             ;;
         *)
             echo "❌ Invalid option"; return ;;
     esac
 
-    local esc_svc esc_usr esc_pw
-    esc_svc=$(printf '%s' "$service"  | jq -Rs '.')
-    esc_usr=$(printf '%s' "$username" | jq -Rs '.')
-    esc_pw=$(printf '%s'  "$password" | jq -Rs '.')
-
-    jq "map(select(.service != $esc_svc)) + \
-        [{\"service\": $esc_svc, \"username\": $esc_usr, \"password\": $esc_pw}]" \
+    jq --arg svc "$service" --arg usr "$username" --arg pw "$password" \
+        'map(select((.service | ascii_downcase) != ($svc | ascii_downcase) or .username != $usr)) + [{"service": $svc, "username": $usr, "password": $pw}]' \
         "$TEMP_FILE" > "${TEMP_FILE}.tmp"
     mv "${TEMP_FILE}.tmp" "$TEMP_FILE"
 
     encrypt_file
     audit_log "STORE: new entry saved"
-    echo "✅ Password stored successfully for service: $service"
+    echo "✅ Password stored successfully for $service ($username)"
 }
 
 retrieve_password() {
@@ -583,30 +610,55 @@ retrieve_password() {
     read -rp "Service: " service
     [ -z "$service" ] && { echo "❌ Service name cannot be empty"; return; }
 
-    local esc_svc
-    esc_svc=$(printf '%s' "$service" | jq -Rs '.')
+    # Query matching entries
+    local entries
+    entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
 
-    local result
-    result=$(jq -r ".[] | select(.service | ascii_downcase == ($esc_svc | ascii_downcase))" "$TEMP_FILE")
+    local count
+    count=$(echo "$entries" | grep -c '^' || true)
 
-    if [ -z "$result" ]; then
+    if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
         echo "❌ Not found"
         return
     fi
 
     local username password
-    username=$(printf '%s' "$result" | jq -r ".username")
-    password=$(printf '%s' "$result" | jq -r ".password")
+    if [ "$count" -eq 1 ]; then
+        username=$(echo "$entries" | jq -r '.username')
+        password=$(echo "$entries" | jq -r '.password')
+    else
+        echo "Multiple accounts found for service '$service':"
+        local i=1
+        local usernames=()
+        while IFS= read -r line; do
+            if [ -n "$line" ]; then
+                local usr
+                usr=$(echo "$line" | jq -r '.username')
+                usernames+=("$usr")
+                echo "  $i) $usr"
+                i=$((i + 1))
+            fi
+        done <<< "$entries"
+
+        read -rp "Select username to retrieve (1-$((i-1))): " choice
+        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
+            echo "❌ Invalid choice"
+            return
+        fi
+        username="${usernames[$((choice - 1))]}"
+        password=$(echo "$entries" | jq -r --arg usr "$username" 'select(.username == $usr) | .password')
+    fi
 
     echo ""
     echo "📝 Service:  $service"
     echo "👤 Username: $username"
-    # Password is never printed; user must copy it to clipboard
     echo "🔑 Password: (use clipboard option below)"
     echo ""
 
     read -rp "Copy password to clipboard? (y/n): " c
-    [ "$c" = "y" ] && copy_clipboard "$password"
+    if [ "$c" = "y" ]; then
+        copy_clipboard "$password" || true
+    fi
 
     audit_log "RETRIEVE: entry accessed"
 }
@@ -614,29 +666,59 @@ retrieve_password() {
 delete_password() {
     decrypt_file
 
-    echo "Stored services:"
-    jq -r ".[].service" "$TEMP_FILE" | sort | nl
+    echo "Stored accounts:"
+    jq -r '.[] | "  • \(.service) (\(.username))"' "$TEMP_FILE" | sort | nl
     echo ""
 
     read -rp "Service to delete: " service
     [ -z "$service" ] && { echo "❌ Service name cannot be empty"; return; }
 
-    local esc_svc
-    esc_svc=$(printf '%s' "$service" | jq -Rs '.')
+    # Query matching entries
+    local entries
+    entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
 
     local count
-    count=$(jq "[.[] | select(.service == $esc_svc)] | length" "$TEMP_FILE")
-    if [ "$count" -eq 0 ]; then
-        echo "❌ Service not found"; return
+    count=$(echo "$entries" | grep -c '^' || true)
+
+    if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
+        echo "❌ Service not found"
+        return
     fi
 
-    read -rp "Are you sure you want to delete '$service'? (y/n): " confirm
+    local username
+    if [ "$count" -eq 1 ]; then
+        username=$(echo "$entries" | jq -r '.username')
+    else
+        echo "Multiple accounts found for service '$service':"
+        local i=1
+        local usernames=()
+        while IFS= read -r line; do
+            if [ -n "$line" ]; then
+                local usr
+                usr=$(echo "$line" | jq -r '.username')
+                usernames+=("$usr")
+                echo "  $i) $usr"
+                i=$((i + 1))
+            fi
+        done <<< "$entries"
+
+        read -rp "Select username to delete (1-$((i-1))): " choice
+        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
+            echo "❌ Invalid choice"
+            return
+        fi
+        username="${usernames[$((choice - 1))]}"
+    fi
+
+    read -rp "Are you sure you want to delete '$service' for user '$username'? (y/n): " confirm
     if [ "$confirm" = "y" ]; then
-        jq "map(select(.service != $esc_svc))" "$TEMP_FILE" > "${TEMP_FILE}.tmp"
+        jq --arg svc "$service" --arg usr "$username" \
+            'map(select((.service | ascii_downcase) != ($svc | ascii_downcase) or .username != $usr))' \
+            "$TEMP_FILE" > "${TEMP_FILE}.tmp"
         mv "${TEMP_FILE}.tmp" "$TEMP_FILE"
         encrypt_file
         audit_log "DELETE: entry removed"
-        echo "✅ Service '$service' deleted successfully"
+        echo "✅ Account '$service ($username)' deleted successfully"
     else
         echo "Operation cancelled"
     fi
@@ -645,29 +727,58 @@ delete_password() {
 edit_password() {
     decrypt_file
 
-    echo "Stored services:"
-    jq -r ".[].service" "$TEMP_FILE" | sort | nl
+    echo "Stored accounts:"
+    jq -r '.[] | "  • \(.service) (\(.username))"' "$TEMP_FILE" | sort | nl
     echo ""
 
     read -rp "Service to edit: " service
     [ -z "$service" ] && { echo "❌ Service name cannot be empty"; return; }
 
-    local esc_svc
-    esc_svc=$(printf '%s' "$service" | jq -Rs '.')
+    # Query matching entries
+    local entries
+    entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
 
-    local current
-    current=$(jq -r ".[] | select(.service == $esc_svc)" "$TEMP_FILE")
-    if [ -z "$current" ]; then
-        echo "❌ Service not found"; return
+    local count
+    count=$(echo "$entries" | grep -c '^' || true)
+
+    if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
+        echo "❌ Service not found"
+        return
     fi
 
-    local current_username current_password
-    current_username=$(printf '%s' "$current" | jq -r ".username")
-    current_password=$(printf '%s' "$current" | jq -r ".password")
+    local username
+    if [ "$count" -eq 1 ]; then
+        username=$(echo "$entries" | jq -r '.username')
+    else
+        echo "Multiple accounts found for service '$service':"
+        local i=1
+        local usernames=()
+        while IFS= read -r line; do
+            if [ -n "$line" ]; then
+                local usr
+                usr=$(echo "$line" | jq -r '.username')
+                usernames+=("$usr")
+                echo "  $i) $usr"
+                i=$((i + 1))
+            fi
+        done <<< "$entries"
 
-    echo "Current username: $current_username"
+        read -rp "Select username to edit (1-$((i-1))): " choice
+        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
+            echo "❌ Invalid choice"
+            return
+        fi
+        username="${usernames[$((choice - 1))]}"
+    fi
+
+    local current_entry
+    current_entry=$(echo "$entries" | jq --arg usr "$username" 'select(.username == $usr)')
+    local current_password
+    current_password=$(echo "$current_entry" | jq -r '.password')
+
+    echo "Current username: $username"
     read -rp "New username (leave empty to keep current): " new_username
-    new_username=${new_username:-$current_username}
+    new_username=${new_username:-$username}
 
     echo "Current service: $service"
     read -rp "New service name (leave empty to keep current): " new_service
@@ -693,7 +804,9 @@ edit_password() {
             new_password=$(generate_password "$DEFAULT_PASSWORD_LENGTH")
             echo "✅ Password generated."
             read -rp "Copy to clipboard? (y/n): " c
-            [ "$c" = "y" ] && copy_clipboard "$new_password"
+            if [ "$c" = "y" ]; then
+                copy_clipboard "$new_password" || true
+            fi
             ;;
         3)
             new_password="$current_password" ;;
@@ -701,26 +814,15 @@ edit_password() {
             echo "❌ Invalid option"; return ;;
     esac
 
-    local esc_new_svc esc_new_usr esc_new_pw
-    esc_new_svc=$(printf '%s' "$new_service"  | jq -Rs '.')
-    esc_new_usr=$(printf '%s' "$new_username" | jq -Rs '.')
-    esc_new_pw=$(printf '%s'  "$new_password" | jq -Rs '.')
+    jq --arg svc "$service" --arg usr "$username" \
+       --arg new_svc "$new_service" --arg new_usr "$new_username" --arg new_pw "$new_password" \
+       'map(select((.service | ascii_downcase) != ($svc | ascii_downcase) or .username != $usr) | select((.service | ascii_downcase) != ($new_svc | ascii_downcase) or .username != $new_usr)) + [{"service": $new_svc, "username": $new_usr, "password": $new_pw}]' \
+       "$TEMP_FILE" > "${TEMP_FILE}.tmp"
 
-    if [ "$service" != "$new_service" ]; then
-        jq "map(select(.service != $esc_svc)) + \
-            [{\"service\": $esc_new_svc, \"username\": $esc_new_usr, \"password\": $esc_new_pw}]" \
-            "$TEMP_FILE" > "${TEMP_FILE}.tmp"
-        audit_log "EDIT: entry renamed"
-    else
-        jq "map(if .service == $esc_svc then \
-            .username = $esc_new_usr | .password = $esc_new_pw else . end)" \
-            "$TEMP_FILE" > "${TEMP_FILE}.tmp"
-        audit_log "EDIT: entry updated"
-    fi
     mv "${TEMP_FILE}.tmp" "$TEMP_FILE"
-
     encrypt_file
-    echo "✅ Service '$new_service' updated successfully"
+    audit_log "EDIT: entry updated"
+    echo "✅ Account '$new_service ($new_username)' updated successfully"
 }
 
 list_passwords() {
@@ -747,13 +849,9 @@ search_passwords() {
     read -rp "Search query: " query
     [ -z "$query" ] && { echo "❌ Search query cannot be empty"; return; }
 
-    local esc_query
-    esc_query=$(printf '%s' "$query" | jq -Rs '.')
-
     local results
-    results=$(jq -r \
-        "[.[] | select(.service | ascii_downcase | contains($esc_query | ascii_downcase))] \
-         | .[] | \"  • \(.service) (\(.username))\"" \
+    results=$(jq -r --arg q "$query" \
+        '[.[] | select(.service | ascii_downcase | contains($q | ascii_downcase))] | .[] | "  • \(.service) (\(.username))"' \
         "$TEMP_FILE" 2>/dev/null)
 
     if [ -z "$results" ]; then
@@ -783,7 +881,7 @@ export_passwords() {
 
     read -rp "Export filename: " filename
     [ -z "$filename" ] && { echo "❌ Filename cannot be empty"; return; }
-    [[ "$filename" != /* ]] && filename="$APP_DIR/$filename"
+    [[ "$filename" != /* ]] && filename="$PWD/$filename"
 
     case "$export_choice" in
         1)
@@ -802,13 +900,13 @@ export_passwords() {
             read -rs exp_pass; echo ""
             [ -z "$exp_pass" ] && { echo "❌ Passphrase cannot be empty"; return; }
 
-            openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -salt \
+            openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -salt \
                 -in "$TEMP_FILE" -pass fd:3 -out "$filename" 3<<<"$exp_pass" 2>/dev/null
             chmod 600 "$filename"
             local count
             count=$(jq '. | length' "$TEMP_FILE")
             echo "✅ $count passwords exported (encrypted) to: $filename"
-            echo "   Decrypt with: openssl enc -d -aes-256-cbc -pbkdf2 -iter $PBKDF2_ITER -in \"$filename\" -pass stdin"
+            echo "   Decrypt with: openssl enc -d -aes-256-cbc -pbkdf2 -iter $PBKDF2_ITER -md sha256 -in \"$filename\" -pass stdin"
             audit_log "EXPORT: encrypted export performed"
             ;;
         3)
@@ -823,7 +921,7 @@ import_passwords() {
 
     read -rp "Import filename: " filename
     [ -z "$filename" ] && { echo "❌ Filename cannot be empty"; return; }
-    [[ "$filename" != /* ]] && filename="$APP_DIR/$filename"
+    [[ "$filename" != /* ]] && filename="$PWD/$filename"
     [ ! -f "$filename" ] && { echo "❌ File not found: $filename"; return; }
 
     local import_file
@@ -835,7 +933,7 @@ import_passwords() {
         echo "File appears to be encrypted. Enter the export passphrase:"
         local exp_pass=""
         read -rs exp_pass; echo ""
-        openssl enc -d -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" \
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 \
             -in "$filename" -pass fd:3 -out "$import_file" 3<<<"$exp_pass" 2>/dev/null || {
             echo "❌ Failed to decrypt: wrong passphrase or not an encrypted export"
             return
@@ -859,12 +957,12 @@ import_passwords() {
         . as $existing |
         reduce ($imported[0][] | select(type == "object" and has("service") and has("password"))) as $item (
             $existing;
-            if any(.[]; .service == $item.service) then . else . + [$item] end
+            if any(.[]; (.service | ascii_downcase) == ($item.service | ascii_downcase) and .username == $item.username) then . else . + [$item] end
         )
     ' "$TEMP_FILE" > "${TEMP_FILE}.tmp" 2>/dev/null
 
     if ! jq empty "${TEMP_FILE}.tmp" 2>/dev/null; then
-        echo "❌ Error merging data"; rm -f "${TEMP_FILE}.tmp"; return
+        echo "❌ Error merging data"; secure_remove_file "${TEMP_FILE}.tmp"; return
     fi
 
     mv "${TEMP_FILE}.tmp" "$TEMP_FILE"
@@ -934,7 +1032,7 @@ configure_settings() {
         3)
             read -rp "Set password file path (current: $PASSWORD_FILE): " new_path
             if [ -n "$new_path" ]; then
-                [[ "$new_path" != /* ]] && new_path="$APP_DIR/$new_path"
+                [[ "$new_path" != /* ]] && new_path="$PWD/$new_path"
                 PASSWORD_FILE="$new_path"
                 save_config "$DEFAULT_PASSWORD_LENGTH"
                 audit_log "CONFIG: password file path updated"
@@ -945,7 +1043,7 @@ configure_settings() {
             rm -f "$CONFIG_FILE"
             DEFAULT_PASSWORD_LENGTH=16
             CLIPBOARD_TIMEOUT=30
-            PASSWORD_FILE="$APP_DIR/passwords.enc"
+            PASSWORD_FILE="$DATA_DIR/passwords.enc"
             audit_log "CONFIG: reset to defaults"
             echo "✅ Settings reset to defaults"
             ;;
@@ -997,9 +1095,8 @@ main_menu() {
 # Entry Point
 # ==============================================================================
 
-# Restrict application directory to owner only
-chmod 700 "$APP_DIR" 2>/dev/null || true
-
-load_config
-prompt_master_password
-main_menu
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    load_config
+    prompt_master_password
+    main_menu
+fi
