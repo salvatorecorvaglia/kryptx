@@ -2,6 +2,14 @@
 
 set -euo pipefail
 
+# Verify dependencies are installed
+for cmd in openssl jq; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        printf '❌ Error: "%s" is required but not installed.\n' "$cmd" >&2
+        exit 1
+    fi
+done
+
 # ==============================================================================
 # Configuration and Global Variables
 # ==============================================================================
@@ -96,13 +104,13 @@ secure_cleanup() {
 # Create temp file — prefer /dev/shm (RAM-backed) to avoid any disk write
 _make_tempfile() {
     local f
-    if [ -d /dev/shm ]; then
+    if [ -d /dev/shm ] && [ -w /dev/shm ]; then
         f=$(mktemp /dev/shm/kryptx.XXXXXXXXXX)
     else
         f=$(mktemp)
     fi
     chmod 600 "$f"
-    echo "$f"
+    printf '%s\n' "$f"
 }
 
 # Bootstrap temp file and trap
@@ -138,7 +146,13 @@ save_config() {
         config_json="{}"
     fi
 
-    echo "$config_json" | jq \
+    # Ensure parent directory exists
+    local parent_dir
+    parent_dir=$(dirname "$CONFIG_FILE")
+    mkdir -p "$parent_dir"
+    chmod 700 "$parent_dir" 2>/dev/null || true
+
+    printf '%s\n' "$config_json" | jq \
         --argjson pl "${1:-$DEFAULT_PASSWORD_LENGTH}" \
         --argjson ct "${CLIPBOARD_TIMEOUT}" \
         --arg pf "$PASSWORD_FILE" \
@@ -166,18 +180,21 @@ check_password_strength() {
     local password="$1"
     local length=${#password}
     local score=0
-    local warn_short="" warn_upper="" warn_lower="" warn_digit="" warn_special=""
+    local warn_upper="" warn_lower="" warn_digit="" warn_special=""
 
-    [ "$length" -lt 8 ] && warn_short="YES"
+    if [ "$length" -lt 8 ]; then
+        printf 'Password is too weak:\n'
+        printf '   Warning: Password is too short (min 8 chars)\n'
+        return 1
+    fi
 
-    echo "$password" | grep -q '[A-Z]' && score=$((score + 1)) || warn_upper="YES"
-    echo "$password" | grep -q '[a-z]' && score=$((score + 1)) || warn_lower="YES"
-    echo "$password" | grep -q '[0-9]' && score=$((score + 1)) || warn_digit="YES"
-    echo "$password" | grep -q '[^A-Za-z0-9]' && score=$((score + 1)) || warn_special="YES"
+    [[ "$password" =~ [A-Z] ]] && score=$((score + 1)) || warn_upper="YES"
+    [[ "$password" =~ [a-z] ]] && score=$((score + 1)) || warn_lower="YES"
+    [[ "$password" =~ [0-9] ]] && score=$((score + 1)) || warn_digit="YES"
+    [[ "$password" =~ [^A-Za-z0-9] ]] && score=$((score + 1)) || warn_special="YES"
 
     if [ "$score" -lt 2 ]; then
-        echo "Password is too weak:"
-        [ -n "$warn_short"   ] && printf '   Warning: Password is too short (min 8 chars)\n'
+        printf 'Password is too weak:\n'
         [ -n "$warn_upper"   ] && printf '   Warning: No uppercase letters\n'
         [ -n "$warn_lower"   ] && printf '   Warning: No lowercase letters\n'
         [ -n "$warn_digit"   ] && printf '   Warning: No digits\n'
@@ -187,7 +204,7 @@ check_password_strength() {
 
     if [ "$length" -lt 12 ] || [ -n "$warn_upper" ] || [ -n "$warn_lower" ] || \
        [ -n "$warn_digit" ] || [ -n "$warn_special" ]; then
-        echo "Password could be stronger:"
+        printf 'Password could be stronger:\n'
         [ "$length" -lt 12  ] && printf '   Tip: Consider using at least 12 characters\n'
         [ -n "$warn_upper"  ] && printf '   Tip: Add uppercase letters\n'
         [ -n "$warn_lower"  ] && printf '   Tip: Add lowercase letters\n'
@@ -243,6 +260,10 @@ encrypt_file() {
     # Bundle as  hmac_hex:base64(ciphertext)
     local ct_b64
     ct_b64=$(base64 < "$ct_file" | tr -d '\n')
+    local p_dir
+    p_dir=$(dirname "$PASSWORD_FILE")
+    mkdir -p "$p_dir"
+    chmod 700 "$p_dir" 2>/dev/null || true
     printf '%s:%s\n' "$hmac" "$ct_b64" > "$PASSWORD_FILE"
     chmod 600 "$PASSWORD_FILE"
 
@@ -273,7 +294,7 @@ decrypt_file() {
     local ct_file
     ct_file=$(_make_tempfile)
     TEMP_FILES_TO_CLEAN+=("$ct_file")
-    echo "$ct_b64" | base64 -d > "$ct_file"
+    printf '%s' "$ct_b64" | base64 -d > "$ct_file"
 
     # Verify HMAC before decrypting to detect tampering
     local computed_hmac
@@ -615,7 +636,7 @@ retrieve_password() {
     entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
 
     local count
-    count=$(echo "$entries" | grep -c '^' || true)
+    count=$(printf '%s' "$entries" | grep -c '^' || true)
 
     if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
         echo "❌ Not found"
@@ -624,8 +645,8 @@ retrieve_password() {
 
     local username password
     if [ "$count" -eq 1 ]; then
-        username=$(echo "$entries" | jq -r '.username')
-        password=$(echo "$entries" | jq -r '.password')
+        username=$(printf '%s\n' "$entries" | jq -r '.username')
+        password=$(printf '%s\n' "$entries" | jq -r '.password')
     else
         echo "Multiple accounts found for service '$service':"
         local i=1
@@ -633,7 +654,7 @@ retrieve_password() {
         while IFS= read -r line; do
             if [ -n "$line" ]; then
                 local usr
-                usr=$(echo "$line" | jq -r '.username')
+                usr=$(printf '%s\n' "$line" | jq -r '.username')
                 usernames+=("$usr")
                 echo "  $i) $usr"
                 i=$((i + 1))
@@ -646,7 +667,7 @@ retrieve_password() {
             return
         fi
         username="${usernames[$((choice - 1))]}"
-        password=$(echo "$entries" | jq -r --arg usr "$username" 'select(.username == $usr) | .password')
+        password=$(printf '%s\n' "$entries" | jq -r --arg usr "$username" 'select(.username == $usr) | .password')
     fi
 
     echo ""
@@ -678,7 +699,7 @@ delete_password() {
     entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
 
     local count
-    count=$(echo "$entries" | grep -c '^' || true)
+    count=$(printf '%s' "$entries" | grep -c '^' || true)
 
     if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
         echo "❌ Service not found"
@@ -687,7 +708,7 @@ delete_password() {
 
     local username
     if [ "$count" -eq 1 ]; then
-        username=$(echo "$entries" | jq -r '.username')
+        username=$(printf '%s\n' "$entries" | jq -r '.username')
     else
         echo "Multiple accounts found for service '$service':"
         local i=1
@@ -695,7 +716,7 @@ delete_password() {
         while IFS= read -r line; do
             if [ -n "$line" ]; then
                 local usr
-                usr=$(echo "$line" | jq -r '.username')
+                usr=$(printf '%s\n' "$line" | jq -r '.username')
                 usernames+=("$usr")
                 echo "  $i) $usr"
                 i=$((i + 1))
@@ -739,7 +760,7 @@ edit_password() {
     entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
 
     local count
-    count=$(echo "$entries" | grep -c '^' || true)
+    count=$(printf '%s' "$entries" | grep -c '^' || true)
 
     if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
         echo "❌ Service not found"
@@ -748,7 +769,7 @@ edit_password() {
 
     local username
     if [ "$count" -eq 1 ]; then
-        username=$(echo "$entries" | jq -r '.username')
+        username=$(printf '%s\n' "$entries" | jq -r '.username')
     else
         echo "Multiple accounts found for service '$service':"
         local i=1
@@ -756,7 +777,7 @@ edit_password() {
         while IFS= read -r line; do
             if [ -n "$line" ]; then
                 local usr
-                usr=$(echo "$line" | jq -r '.username')
+                usr=$(printf '%s\n' "$line" | jq -r '.username')
                 usernames+=("$usr")
                 echo "  $i) $usr"
                 i=$((i + 1))
@@ -772,9 +793,9 @@ edit_password() {
     fi
 
     local current_entry
-    current_entry=$(echo "$entries" | jq --arg usr "$username" 'select(.username == $usr)')
+    current_entry=$(printf '%s\n' "$entries" | jq --arg usr "$username" 'select(.username == $usr)')
     local current_password
-    current_password=$(echo "$current_entry" | jq -r '.password')
+    current_password=$(printf '%s\n' "$current_entry" | jq -r '.password')
 
     echo "Current username: $username"
     read -rp "New username (leave empty to keep current): " new_username
@@ -881,7 +902,28 @@ export_passwords() {
 
     read -rp "Export filename: " filename
     [ -z "$filename" ] && { echo "❌ Filename cannot be empty"; return; }
+    
+    if [[ "$filename" == ~/* ]]; then
+        filename="$HOME/${filename#~/}"
+    fi
     [[ "$filename" != /* ]] && filename="$PWD/$filename"
+
+    # Ensure parent directory exists
+    local parent_dir
+    parent_dir=$(dirname "$filename")
+    if [ ! -d "$parent_dir" ]; then
+        mkdir -p "$parent_dir"
+        chmod 700 "$parent_dir"
+    fi
+
+    # Check for overwrites
+    if [ -f "$filename" ]; then
+        read -rp "⚠️  File already exists. Overwrite? (y/n): " ov_choice
+        if [ "$ov_choice" != "y" ]; then
+            echo "Operation cancelled."
+            return
+        fi
+    fi
 
     case "$export_choice" in
         1)
@@ -921,6 +963,9 @@ import_passwords() {
 
     read -rp "Import filename: " filename
     [ -z "$filename" ] && { echo "❌ Filename cannot be empty"; return; }
+    if [[ "$filename" == ~/* ]]; then
+        filename="$HOME/${filename#~/}"
+    fi
     [[ "$filename" != /* ]] && filename="$PWD/$filename"
     [ ! -f "$filename" ] && { echo "❌ File not found: $filename"; return; }
 
@@ -928,8 +973,8 @@ import_passwords() {
     import_file=$(_make_tempfile)
     TEMP_FILES_TO_CLEAN+=("$import_file")
 
-    # Check if it looks like an encrypted export
-    if ! jq empty "$filename" 2>/dev/null; then
+    # Check if it looks like an encrypted export using the Salted__ magic header
+    if [ "$(head -c 8 "$filename" 2>/dev/null)" = "Salted__" ]; then
         echo "File appears to be encrypted. Enter the export passphrase:"
         local exp_pass=""
         read -rs exp_pass; echo ""
@@ -955,7 +1000,12 @@ import_passwords() {
 
     jq --slurpfile imported "$import_file" '
         . as $existing |
-        reduce ($imported[0][] | select(type == "object" and has("service") and has("password"))) as $item (
+        reduce ($imported[0][] | select(
+            type == "object" and
+            (.service | type == "string" and . != "") and
+            (.username | type == "string" and . != "") and
+            (.password | type == "string" and . != "")
+        )) as $item (
             $existing;
             if any(.[]; (.service | ascii_downcase) == ($item.service | ascii_downcase) and .username == $item.username) then . else . + [$item] end
         )
@@ -1032,7 +1082,16 @@ configure_settings() {
         3)
             read -rp "Set password file path (current: $PASSWORD_FILE): " new_path
             if [ -n "$new_path" ]; then
+                if [[ "$new_path" == ~/* ]]; then
+                    new_path="$HOME/${new_path#~/}"
+                fi
                 [[ "$new_path" != /* ]] && new_path="$PWD/$new_path"
+                
+                local parent_dir
+                parent_dir=$(dirname "$new_path")
+                mkdir -p "$parent_dir"
+                chmod 700 "$parent_dir" 2>/dev/null || true
+                
                 PASSWORD_FILE="$new_path"
                 save_config "$DEFAULT_PASSWORD_LENGTH"
                 audit_log "CONFIG: password file path updated"

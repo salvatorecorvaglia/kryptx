@@ -4,123 +4,73 @@
 
 ---
 
-## 🚀 Features
+## ✨ Features
 
-- **Authenticated Encryption**: Uses **AES-256-CBC** with an **Encrypt-then-MAC (EtM)** approach using **HMAC-SHA256** to ensure data integrity and authenticity.
-- **Hardened Key Derivation**: Employs **PBKDF2** with **600,000 iterations** (pinned) to protect against modern brute-force hardware.
-- **Zero-Exposure Architecture**: Master passwords are never passed via command-line arguments or environment variables; they are read via secure `stdin` and passed to OpenSSL via file descriptors.
-- **XDG Base Directory Compliance**: Safely stores configuration and vault data in standard system directories (`~/.config/kryptx` and `~/.local/share/kryptx` with `chmod 700` permissions), avoiding directory clutter.
-- **Secure Memory Management**:
-  - Prefers **RAM-backed storage** (`/dev/shm`) for temporary files to prevent sensitive data from hitting the physical disk.
-  - Temporary files are **securely wiped** using `shred` (or random-data overwrite fallback) before deletion.
-- **Multi-Account Support**: Allows storing multiple usernames/credentials under the same service, with interactive username selection menus for retrieval, editing, and deletion.
-- **Flexible Export/Import**: Supports both raw JSON and **Encrypted Export** files (using a separate passphrase), facilitating secure migrations and backups.
-- **Clipboard Integration**: Copy passwords directly with a configurable **auto-clear timeout** (default 30s).
-- **Security Lockout**: Automatic 5-minute lockout after 5 failed authentication attempts to thwart automated attacks.
-- **Audit Logging**: Comprehensive action logging to `kryptx-audit.log` (sensitive metadata like service names are never logged).
-- **Search & Management**: Intuitive interactive menu for storing, retrieving, editing, and searching entries with case-insensitive matching.
+*   **Robust Encryption**: AES-256-CBC paired with a high-entropy PBKDF2 key derivation function pinned at **600,000 iterations** for defense against GPU/CPU-based cracking attempts.
+*   **Tamper Evidence (Encrypt-then-MAC)**: Employs HMAC-SHA256 to sign and verify the encrypted vault, preventing ciphertext tampering or manipulation attacks.
+*   **Zero-Exposure Passwords**: The master password is input via secure prompts and piped internally using dedicated file descriptors, preventing it from appearing in processes (`ps` or `/proc/<pid>/cmdline`).
+*   **Temporary Lockout Mechanism**: Enforces a strict lockout penalty (5 minutes) after 5 consecutive failed attempts to prevent automated brute-force attacks.
+*   **Secure Temp Wiping**: Sensitive data is processed in RAM-backed temporary directories (`/dev/shm` on Linux) and cleaned up securely upon exit. Temporary files are destroyed using `shred` (or random-byte overwrite fallback) and variables are zeroed in memory.
+*   **Anonymous Audit Log**: Maintains an audit history of actions (`STORE`, `RETRIEVE`, `DELETE`, etc.) without ever writing service names, usernames, or password metadata to disk.
+*   **Entropic Password Generator**: Generates high-entropy passwords with custom length, ensuring strict character diversity (at least one lowercase, uppercase, number, and special character) without entropy-reducing shuffle techniques.
+*   **Clipboard Auto-Clear**: Automatically copies retrieved passwords to the system clipboard and clears it after a configurable timer (default: 30 seconds).
+*   **Import / Export**: Supports JSON-based import/export, with options for fully encrypted backup payloads using custom passphrases.
 
 ---
 
-## 🛠️ Prerequisites
+## 🛠️ Requirements
 
-Ensure you have the following tools installed:
+Ensure the following tools are installed and available in your environment:
 
-- **Bash** (3.2+)
-- **OpenSSL** (1.1.1+ recommended)
-- **jq** (for JSON processing)
+1.  **Shell**: Bash (version 4.0 or newer recommended)
+2.  **Core Utilities**: `openssl` (for cryptography), `jq` (for secure JSON querying/parsing)
+3.  **Clipboard Managers** (Optional, for clipboard integration):
+    *   **macOS**: `pbcopy` (built-in)
+    *   **Linux (X11)**: `xclip`
+    *   **Linux (Wayland)**: `wl-copy`
+
+---
+
+## 🚀 Getting Started
 
 ### Installation
 
-#### macOS
-
-```bash
-brew install openssl jq
-```
-
-#### Ubuntu / Debian
-
-```bash
-sudo apt update && sudo apt install openssl jq xclip  # xclip for clipboard support
-```
-
-#### Arch Linux
-
-```bash
-sudo pacman -S openssl jq xclip
-```
-
-> [!TIP]
-> On Linux, `kryptx` supports `xclip` (X11), `wl-clipboard` (Wayland), and `pbcopy` (macOS).
-
----
-
-## 💻 Usage
-
-### 1. Clone the repository
+Clone the repository and make the script executable:
 
 ```bash
 git clone https://github.com/salvatorecorvaglia/kryptx.git
 cd kryptx
-```
-
-### 2. Make the script executable
-
-```bash
 chmod +x kryptx.sh
 ```
 
-### 3. Start managing passwords
+### Running the Password Manager
+
+To launch the menu-driven password manager:
 
 ```bash
 ./kryptx.sh
 ```
 
-> [!IMPORTANT]
-> On the first run, you will set a **Master Password**. This is the only way to unlock your vault. **There is no recovery mechanism for a lost Master Password.**
+On your first run, you will be prompted to create and confirm a Master Password to initialize your vault file (`~/.local/share/kryptx/passwords.enc`).
 
 ---
 
-## 📋 Available Commands
+## 📂 Project Structure
 
-1.  **Store**: Add new entries with manual input or auto-generation. Supports storing multiple accounts (usernames) per service and includes password strength validation.
-2.  **Retrieve**: View credentials and copy passwords to the clipboard. Prompts for username selection if multiple accounts exist for a service.
-3.  **List**: Overview of all stored services and usernames.
-4.  **Search**: Fast substring search across all service names.
-5.  **Edit**: Modify existing usernames, service names, or passwords. Prompts for username selection if multiple accounts exist for a service.
-6.  **Delete**: Securely remove an entry from the vault. Prompts for username selection if multiple accounts exist for a service.
-7.  **Import**: Load entries from JSON or encrypted export files, automatically resolving and merging duplicate entries.
-8.  **Export**: Create unencrypted JSON backups or **passphrase-protected encrypted exports**.
-9.  **Settings**: Configure password length, clipboard timeouts, and custom vault paths.
-10. **Exit**: Securely wipe memory/temp files and terminate the session.
+*   [kryptx.sh](kryptx.sh) — Core password manager bash application.
+*   [test_kryptx.sh](test_kryptx.sh) — Unit test suite for verifying cryptography, parsing, and strength checks.
+*   [SECURITY.md](SECURITY.md) — Security policy and vulnerability reporting workflow.
+*   [LICENSE](LICENSE) — MIT License.
 
 ---
 
-## 🔐 Security Internals
+## 🧪 Testing
 
-- **Cipher**: `AES-256-CBC` for confidentiality.
-- **Integrity**: `HMAC-SHA256` for authenticity (protects against bit-flipping and padding oracle attacks).
-- **KDF**: `PBKDF2` with `600,000` iterations and a unique salt.
-- **Separate Key Derivation**: Derives a distinct `HMAC_KEY` from the master password using PBKDF2 over a static seed, preventing cryptographic key reuse.
-- **Pinned Digest Algorithm**: Explicitly specifies `-md sha256` for PBKDF2 iteration compatibility and reliability across different versions of OpenSSL.
-- **I/O Safety**:
-  - Vault files are restricted to `chmod 600`.
-  - Temporary files are created with `mktemp` in `/dev/shm` (if available).
-  - Trap handlers ensure `secure_cleanup` runs on exit, interrupts, or errors.
-- **Sanitization**: All user inputs are handled via `jq` parameter binding (`--arg`) to prevent JSON or command injection.
+The project includes an automated test suite. Run the tests using:
 
----
-
-## 📂 Storage Structure
-
-kryptx strictly follows the **XDG Base Directory Specification** to keep user home directories clean.
-
-| Default Path | Environment Override | Purpose |
-| :--- | :--- | :--- |
-| `~/.local/share/kryptx/passwords.enc` | `$XDG_DATA_HOME/kryptx/passwords.enc` | The encrypted vault (AES + HMAC). |
-| `~/.config/kryptx/kryptx-config.json` | `$XDG_CONFIG_HOME/kryptx/kryptx-config.json` | User-specific settings (length, timeouts). |
-| `~/.local/share/kryptx/kryptx-audit.log` | `$XDG_DATA_HOME/kryptx/kryptx-audit.log` | Security audit trail (action types and timestamps). |
-| `~/.local/share/kryptx/.kryptx-lock` | `$XDG_DATA_HOME/kryptx/.kryptx-lock` | Temporary lockout marker. |
+```bash
+./test_kryptx.sh
+```
 
 ---
 
