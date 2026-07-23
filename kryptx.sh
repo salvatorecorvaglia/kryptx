@@ -15,6 +15,7 @@ done
 # ==============================================================================
 
 # Application directory (resilient to working directory changes)
+# shellcheck disable=SC2034
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # XDG Base Directory Specification paths
