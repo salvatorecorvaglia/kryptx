@@ -2,7 +2,9 @@
 set -euo pipefail
 
 # Sourcing script functions without executing the main entry point menu
+# shellcheck disable=SC2329
 prompt_master_password() { :; }
+# shellcheck disable=SC2329
 main_menu() { :; }
 
 # Source target script

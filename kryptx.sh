@@ -480,41 +480,41 @@ generate_password() {
         if ! [[ "$password" =~ [A-Z] ]]; then
             local raw_val=${pos_arr[$pi]:-0}
             local idx=$(( raw_val % arr_len ))
-            while [ "${used_indices[$idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
-            used_indices[$idx]=1
+            while [ "${used_indices[idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
+            used_indices[idx]=1
             local ch_idx=$(( raw_val % 26 ))
             local uppers="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            arr[$idx]="${uppers:ch_idx:1}"
+            arr[idx]="${uppers:ch_idx:1}"
             pi=$((pi + 1))
         fi
         if ! [[ "$password" =~ [a-z] ]]; then
             local raw_val=${pos_arr[$pi]:-1}
             local idx=$(( raw_val % arr_len ))
-            while [ "${used_indices[$idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
-            used_indices[$idx]=1
+            while [ "${used_indices[idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
+            used_indices[idx]=1
             local ch_idx=$(( raw_val % 26 ))
             local lowers="abcdefghijklmnopqrstuvwxyz"
-            arr[$idx]="${lowers:ch_idx:1}"
+            arr[idx]="${lowers:ch_idx:1}"
             pi=$((pi + 1))
         fi
         if ! [[ "$password" =~ [0-9] ]]; then
             local raw_val=${pos_arr[$pi]:-2}
             local idx=$(( raw_val % arr_len ))
-            while [ "${used_indices[$idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
-            used_indices[$idx]=1
+            while [ "${used_indices[idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
+            used_indices[idx]=1
             local ch_idx=$(( raw_val % 10 ))
             local digits="0123456789"
-            arr[$idx]="${digits:ch_idx:1}"
+            arr[idx]="${digits:ch_idx:1}"
             pi=$((pi + 1))
         fi
         if [ "$include_symbols" = true ] && ! [[ "$password" =~ [^A-Za-z0-9] ]]; then
             local raw_val=${pos_arr[$pi]:-3}
             local idx=$(( raw_val % arr_len ))
-            while [ "${used_indices[$idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
-            used_indices[$idx]=1
+            while [ "${used_indices[idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
+            used_indices[idx]=1
             local syms='!@#$%^&*()_+-='
             local sym_idx=$(( raw_val % ${#syms} ))
-            arr[$idx]="${syms:sym_idx:1}"
+            arr[idx]="${syms:sym_idx:1}"
         fi
 
         password=$(printf '%s' "${arr[@]}")
