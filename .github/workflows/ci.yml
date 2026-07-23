@@ -27,9 +27,9 @@ jobs:
           bash -n test_kryptx.sh
 
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@2.0.0
         with:
-          sc_extra_args: --severity=warning
+          severity: warning
 
   test:
     name: Run Unit Tests (${{ matrix.os }})
