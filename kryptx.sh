@@ -69,14 +69,17 @@ secure_remove_file() {
     local f="$1"
     if [ -f "$f" ]; then
         if command -v shred >/dev/null 2>&1; then
-            shred -u "$f" 2>/dev/null || rm -f "$f"
+            shred -u -- "$f" 2>/dev/null || rm -f -- "$f"
+        elif command -v srm >/dev/null 2>&1; then
+            srm -z -- "$f" 2>/dev/null || rm -f -- "$f"
         else
             local size
             size=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo "0")
             if [ "$size" -gt 0 ] 2>/dev/null; then
-                dd if=/dev/urandom of="$f" bs=1 count="$size" conv=notrunc 2>/dev/null || true
+                local blocks=$(( (size + 4095) / 4096 ))
+                dd if=/dev/urandom of="$f" bs=4096 count="$blocks" conv=notrunc 2>/dev/null || true
             fi
-            rm -f "$f"
+            rm -f -- "$f"
         fi
     fi
 }
@@ -116,7 +119,7 @@ _make_tempfile() {
 # Bootstrap temp file and trap
 TEMP_FILE=$(_make_tempfile)
 TEMP_FILES_TO_CLEAN+=("$TEMP_FILE" "${TEMP_FILE}.tmp")
-trap secure_cleanup EXIT INT TERM
+trap secure_cleanup EXIT INT TERM HUP QUIT
 
 # ==============================================================================
 # Helper Functions
@@ -152,12 +155,16 @@ save_config() {
     mkdir -p "$parent_dir"
     chmod 700 "$parent_dir" 2>/dev/null || true
 
-    printf '%s\n' "$config_json" | jq \
+    if ! printf '%s\n' "$config_json" | jq \
         --argjson pl "${1:-$DEFAULT_PASSWORD_LENGTH}" \
         --argjson ct "${CLIPBOARD_TIMEOUT}" \
         --arg pf "$PASSWORD_FILE" \
         '.password_length = $pl | .clipboard_timeout = $ct | .password_file = $pf' \
-        > "$CONFIG_FILE.tmp" 2>/dev/null || rm -f "$CONFIG_FILE.tmp"
+        > "$CONFIG_FILE.tmp" 2>/dev/null; then
+        echo "❌ Failed to update configuration file" >&2
+        rm -f -- "$CONFIG_FILE.tmp"
+        return 1
+    fi
 
     if [ -f "$CONFIG_FILE.tmp" ]; then
         mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
@@ -461,48 +468,52 @@ generate_password() {
         done
         local arr_len=${#arr[@]}
 
-        local has_upper has_lower has_digit
-        has_upper=$(printf '%s' "$password" | grep -c '[A-Z]' || true)
-        has_lower=$(printf '%s' "$password" | grep -c '[a-z]' || true)
-        has_digit=$(printf '%s' "$password"  | grep -c '[0-9]' || true)
-
         # Pick injection positions via raw openssl rand to keep entropy high (no base64 bias)
         local rand_positions
         rand_positions=$(openssl rand 16 | od -An -tu1 | tr ' ' '\n' | grep -v '^$' | head -4)
         local pos_arr=()
         while IFS= read -r v; do pos_arr+=("$v"); done <<< "$rand_positions"
 
+        local used_indices=()
         local pi=0
-        if [ "$has_upper" -eq 0 ]; then
-            local idx=$(( ${pos_arr[$pi]:-0} % arr_len ))
-            local ch_idx=$(( ${pos_arr[$pi]:-0} % 26 ))
+        if ! [[ "$password" =~ [A-Z] ]]; then
+            local raw_val=${pos_arr[$pi]:-0}
+            local idx=$(( raw_val % arr_len ))
+            while [ "${used_indices[$idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
+            used_indices[$idx]=1
+            local ch_idx=$(( raw_val % 26 ))
             local uppers="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
             arr[$idx]="${uppers:ch_idx:1}"
             pi=$((pi + 1))
         fi
-        if [ "$has_lower" -eq 0 ]; then
-            local idx=$(( ${pos_arr[$pi]:-1} % arr_len ))
-            local ch_idx=$(( ${pos_arr[$pi]:-1} % 26 ))
+        if ! [[ "$password" =~ [a-z] ]]; then
+            local raw_val=${pos_arr[$pi]:-1}
+            local idx=$(( raw_val % arr_len ))
+            while [ "${used_indices[$idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
+            used_indices[$idx]=1
+            local ch_idx=$(( raw_val % 26 ))
             local lowers="abcdefghijklmnopqrstuvwxyz"
             arr[$idx]="${lowers:ch_idx:1}"
             pi=$((pi + 1))
         fi
-        if [ "$has_digit" -eq 0 ]; then
-            local idx=$(( ${pos_arr[$pi]:-2} % arr_len ))
-            local ch_idx=$(( ${pos_arr[$pi]:-2} % 10 ))
+        if ! [[ "$password" =~ [0-9] ]]; then
+            local raw_val=${pos_arr[$pi]:-2}
+            local idx=$(( raw_val % arr_len ))
+            while [ "${used_indices[$idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
+            used_indices[$idx]=1
+            local ch_idx=$(( raw_val % 10 ))
             local digits="0123456789"
             arr[$idx]="${digits:ch_idx:1}"
             pi=$((pi + 1))
         fi
-        if [ "$include_symbols" = true ]; then
-            local has_sym
-            has_sym=$(printf '%s' "$password" | grep -c '[^A-Za-z0-9]' || true)
-            if [ "$has_sym" -eq 0 ]; then
-                local syms='!@#$%^&*()_+-='
-                local idx=$(( ${pos_arr[$pi]:-3} % arr_len ))
-                local sym_idx=$(( ${pos_arr[$pi]:-3} % ${#syms} ))
-                arr[$idx]="${syms:sym_idx:1}"
-            fi
+        if [ "$include_symbols" = true ] && ! [[ "$password" =~ [^A-Za-z0-9] ]]; then
+            local raw_val=${pos_arr[$pi]:-3}
+            local idx=$(( raw_val % arr_len ))
+            while [ "${used_indices[$idx]:-0}" -eq 1 ]; do idx=$(( (idx + 1) % arr_len )); done
+            used_indices[$idx]=1
+            local syms='!@#$%^&*()_+-='
+            local sym_idx=$(( raw_val % ${#syms} ))
+            arr[$idx]="${syms:sym_idx:1}"
         fi
 
         password=$(printf '%s' "${arr[@]}")
@@ -626,59 +637,116 @@ store_password() {
     echo "✅ Password stored successfully for $service ($username)"
 }
 
-retrieve_password() {
-    decrypt_file
-    read -rp "Service: " service
-    [ -z "$service" ] && { echo "❌ Service name cannot be empty"; return; }
+# Helper: Displays stored accounts and prompts user to pick an entry by list number OR service query.
+# Sets globals: SELECTED_SERVICE, SELECTED_USERNAME, SELECTED_PASSWORD
+_select_account_entry() {
+    local prompt_verb="${1:-select}"
+    local initial_query="${2:-}"
 
-    # Query matching entries
-    local entries
-    entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
+    SELECTED_SERVICE=""
+    SELECTED_USERNAME=""
+    SELECTED_PASSWORD=""
 
-    local count
-    count=$(printf '%s' "$entries" | grep -c '^' || true)
+    local all_entries
+    all_entries=$(jq -c '. | sort_by([(.service | ascii_downcase), .username])' "$TEMP_FILE")
 
-    if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
-        echo "❌ Not found"
-        return
+    local total_count
+    total_count=$(jq '. | length' "$TEMP_FILE")
+
+    if [ "$total_count" -eq 0 ]; then
+        echo "📭 Vault is empty"
+        return 1
     fi
 
-    local username password
-    if [ "$count" -eq 1 ]; then
-        username=$(printf '%s\n' "$entries" | jq -r '.username')
-        password=$(printf '%s\n' "$entries" | jq -r '.password')
+    local target_input=""
+    if [ -n "$initial_query" ]; then
+        target_input="$initial_query"
     else
-        echo "Multiple accounts found for service '$service':"
+        echo "Stored accounts:"
         local i=1
-        local usernames=()
+        while IFS= read -r entry; do
+            if [ -n "$entry" ]; then
+                local svc usr
+                svc=$(jq -r '.service' <<< "$entry")
+                usr=$(jq -r '.username' <<< "$entry")
+                printf "  %2d) %s (%s)\n" "$i" "$svc" "$usr"
+                i=$((i + 1))
+            fi
+        done < <(jq -c '.[]' <<< "$all_entries")
+        echo ""
+        read -rp "Service to $prompt_verb (enter number 1-$total_count or service name): " target_input
+    fi
+
+    [ -z "$target_input" ] && { echo "❌ Input cannot be empty"; return 1; }
+
+    # Option A: User entered a list number
+    if [[ "$target_input" =~ ^[0-9]+$ ]] && [ "$target_input" -ge 1 ] && [ "$target_input" -le "$total_count" ]; then
+        local chosen_entry
+        chosen_entry=$(jq -c --argjson idx "$((target_input - 1))" '.[$idx]' <<< "$all_entries")
+        SELECTED_SERVICE=$(jq -r '.service' <<< "$chosen_entry")
+        SELECTED_USERNAME=$(jq -r '.username' <<< "$chosen_entry")
+        SELECTED_PASSWORD=$(jq -r '.password' <<< "$chosen_entry")
+        return 0
+    fi
+
+    # Option B: User entered a service name (or query)
+    local matches
+    matches=$(jq -c --arg q "$target_input" '.[] | select(.service | ascii_downcase == ($q | ascii_downcase))' <<< "$all_entries")
+    local match_count
+    match_count=$(printf '%s' "$matches" | grep -c '^' || true)
+
+    if [ "$match_count" -eq 0 ] || [ -z "$matches" ]; then
+        echo "❌ Service '$target_input' not found"
+        return 1
+    elif [ "$match_count" -eq 1 ]; then
+        SELECTED_SERVICE=$(jq -r '.service' <<< "$matches")
+        SELECTED_USERNAME=$(jq -r '.username' <<< "$matches")
+        SELECTED_PASSWORD=$(jq -r '.password' <<< "$matches")
+        return 0
+    else
+        echo "Multiple accounts found for service '$target_input':"
+        local i=1
+        local match_list=()
         while IFS= read -r line; do
             if [ -n "$line" ]; then
                 local usr
-                usr=$(printf '%s\n' "$line" | jq -r '.username')
-                usernames+=("$usr")
+                usr=$(jq -r '.username' <<< "$line")
+                match_list+=("$line")
                 echo "  $i) $usr"
                 i=$((i + 1))
             fi
-        done <<< "$entries"
+        done <<< "$matches"
 
-        read -rp "Select username to retrieve (1-$((i-1))): " choice
+        read -rp "Select username to $prompt_verb (1-$((i-1))): " choice
         if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
             echo "❌ Invalid choice"
-            return
+            return 1
         fi
-        username="${usernames[$((choice - 1))]}"
-        password=$(printf '%s\n' "$entries" | jq -r --arg usr "$username" 'select(.username == $usr) | .password')
+        local selected_json="${match_list[$((choice - 1))]}"
+        SELECTED_SERVICE=$(jq -r '.service' <<< "$selected_json")
+        SELECTED_USERNAME=$(jq -r '.username' <<< "$selected_json")
+        SELECTED_PASSWORD=$(jq -r '.password' <<< "$selected_json")
+        return 0
+    fi
+}
+
+retrieve_password() {
+    decrypt_file
+    read -rp "Service (enter number or name): " query
+    [ -z "$query" ] && { echo "❌ Input cannot be empty"; return; }
+    if ! _select_account_entry "retrieve" "$query"; then
+        return
     fi
 
     echo ""
-    echo "📝 Service:  $service"
-    echo "👤 Username: $username"
+    echo "📝 Service:  $SELECTED_SERVICE"
+    echo "👤 Username: $SELECTED_USERNAME"
     echo "🔑 Password: (use clipboard option below)"
     echo ""
 
     read -rp "Copy password to clipboard? (y/n): " c
     if [ "$c" = "y" ]; then
-        copy_clipboard "$password" || true
+        copy_clipboard "$SELECTED_PASSWORD" || true
     fi
 
     audit_log "RETRIEVE: entry accessed"
@@ -686,60 +754,19 @@ retrieve_password() {
 
 delete_password() {
     decrypt_file
-
-    echo "Stored accounts:"
-    jq -r '.[] | "  • \(.service) (\(.username))"' "$TEMP_FILE" | sort | nl
-    echo ""
-
-    read -rp "Service to delete: " service
-    [ -z "$service" ] && { echo "❌ Service name cannot be empty"; return; }
-
-    # Query matching entries
-    local entries
-    entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
-
-    local count
-    count=$(printf '%s' "$entries" | grep -c '^' || true)
-
-    if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
-        echo "❌ Service not found"
+    if ! _select_account_entry "delete"; then
         return
     fi
 
-    local username
-    if [ "$count" -eq 1 ]; then
-        username=$(printf '%s\n' "$entries" | jq -r '.username')
-    else
-        echo "Multiple accounts found for service '$service':"
-        local i=1
-        local usernames=()
-        while IFS= read -r line; do
-            if [ -n "$line" ]; then
-                local usr
-                usr=$(printf '%s\n' "$line" | jq -r '.username')
-                usernames+=("$usr")
-                echo "  $i) $usr"
-                i=$((i + 1))
-            fi
-        done <<< "$entries"
-
-        read -rp "Select username to delete (1-$((i-1))): " choice
-        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
-            echo "❌ Invalid choice"
-            return
-        fi
-        username="${usernames[$((choice - 1))]}"
-    fi
-
-    read -rp "Are you sure you want to delete '$service' for user '$username'? (y/n): " confirm
+    read -rp "Are you sure you want to delete '$SELECTED_SERVICE' for user '$SELECTED_USERNAME'? (y/n): " confirm
     if [ "$confirm" = "y" ]; then
-        jq --arg svc "$service" --arg usr "$username" \
+        jq --arg svc "$SELECTED_SERVICE" --arg usr "$SELECTED_USERNAME" \
             'map(select((.service | ascii_downcase) != ($svc | ascii_downcase) or .username != $usr))' \
             "$TEMP_FILE" > "${TEMP_FILE}.tmp"
         mv "${TEMP_FILE}.tmp" "$TEMP_FILE"
         encrypt_file
         audit_log "DELETE: entry removed"
-        echo "✅ Account '$service ($username)' deleted successfully"
+        echo "✅ Account '$SELECTED_SERVICE ($SELECTED_USERNAME)' deleted successfully"
     else
         echo "Operation cancelled"
     fi
@@ -747,63 +774,21 @@ delete_password() {
 
 edit_password() {
     decrypt_file
-
-    echo "Stored accounts:"
-    jq -r '.[] | "  • \(.service) (\(.username))"' "$TEMP_FILE" | sort | nl
-    echo ""
-
-    read -rp "Service to edit: " service
-    [ -z "$service" ] && { echo "❌ Service name cannot be empty"; return; }
-
-    # Query matching entries
-    local entries
-    entries=$(jq --arg svc "$service" -c '.[] | select(.service | ascii_downcase == ($svc | ascii_downcase))' "$TEMP_FILE")
-
-    local count
-    count=$(printf '%s' "$entries" | grep -c '^' || true)
-
-    if [ "$count" -eq 0 ] || [ -z "$entries" ]; then
-        echo "❌ Service not found"
+    if ! _select_account_entry "edit"; then
         return
     fi
 
-    local username
-    if [ "$count" -eq 1 ]; then
-        username=$(printf '%s\n' "$entries" | jq -r '.username')
-    else
-        echo "Multiple accounts found for service '$service':"
-        local i=1
-        local usernames=()
-        while IFS= read -r line; do
-            if [ -n "$line" ]; then
-                local usr
-                usr=$(printf '%s\n' "$line" | jq -r '.username')
-                usernames+=("$usr")
-                echo "  $i) $usr"
-                i=$((i + 1))
-            fi
-        done <<< "$entries"
+    local orig_service="$SELECTED_SERVICE"
+    local orig_username="$SELECTED_USERNAME"
+    local orig_password="$SELECTED_PASSWORD"
 
-        read -rp "Select username to edit (1-$((i-1))): " choice
-        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
-            echo "❌ Invalid choice"
-            return
-        fi
-        username="${usernames[$((choice - 1))]}"
-    fi
-
-    local current_entry
-    current_entry=$(printf '%s\n' "$entries" | jq --arg usr "$username" 'select(.username == $usr)')
-    local current_password
-    current_password=$(printf '%s\n' "$current_entry" | jq -r '.password')
-
-    echo "Current username: $username"
+    echo "Current username: $orig_username"
     read -rp "New username (leave empty to keep current): " new_username
-    new_username=${new_username:-$username}
+    new_username=${new_username:-$orig_username}
 
-    echo "Current service: $service"
+    echo "Current service: $orig_service"
     read -rp "New service name (leave empty to keep current): " new_service
-    new_service=${new_service:-$service}
+    new_service=${new_service:-$orig_service}
 
     echo ""
     echo "1) Enter new password"
@@ -830,12 +815,12 @@ edit_password() {
             fi
             ;;
         3)
-            new_password="$current_password" ;;
+            new_password="$orig_password" ;;
         *)
             echo "❌ Invalid option"; return ;;
     esac
 
-    jq --arg svc "$service" --arg usr "$username" \
+    jq --arg svc "$orig_service" --arg usr "$orig_username" \
        --arg new_svc "$new_service" --arg new_usr "$new_username" --arg new_pw "$new_password" \
        'map(select((.service | ascii_downcase) != ($svc | ascii_downcase) or .username != $usr) | select((.service | ascii_downcase) != ($new_svc | ascii_downcase) or .username != $new_usr)) + [{"service": $new_svc, "username": $new_usr, "password": $new_pw}]' \
        "$TEMP_FILE" > "${TEMP_FILE}.tmp"

@@ -133,4 +133,67 @@ test_password_strength_acceptable
 test_empty_entries_line_count
 test_make_tempfile
 test_crypto_roundtrip
+
+test_crypto_hmac_tamper() {
+    printf 'Running test_crypto_hmac_tamper... '
+    export MASTER_PASSWORD="supersecretpass"
+    export HMAC_KEY=$(printf '%s' "kryptx-hmac-key-seed-v1" | openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -nosalt -pass fd:3 3<<<"$MASTER_PASSWORD" 2>/dev/null | base64 | tr -d '\n')
+    
+    export PASSWORD_FILE="./test_tamper_passwords.enc"
+    export TEMP_FILE="./test_tamper_temp.json"
+    
+    printf '[{"service":"Github","username":"bob","password":"secret"}]\n' > "$TEMP_FILE"
+    encrypt_file >/dev/null 2>&1
+    
+    # Tamper with the encrypted file (modify HMAC prefix)
+    printf '0000000000000000000000000000000000000000000000000000000000000000:badpayload\n' > "$PASSWORD_FILE"
+    
+    rm -f "$TEMP_FILE"
+    if decrypt_file >/dev/null 2>&1; then
+        printf '❌ Assertion failed: decrypt_file succeeded on tampered ciphertext, but expected failure\n' >&2
+        rm -f "$PASSWORD_FILE" "$TEMP_FILE"
+        exit 1
+    fi
+    
+    rm -f "$PASSWORD_FILE" "$TEMP_FILE"
+    printf 'OK\n'
+}
+
+test_entry_selection_by_index() {
+    printf 'Running test_entry_selection_by_index... '
+    export TEMP_FILE="./test_selection_temp.json"
+    printf '[\n  {"service":"Alpha","username":"user1","password":"p1"},\n  {"service":"Beta","username":"user2","password":"p2"}\n]\n' > "$TEMP_FILE"
+    
+    if ! _select_account_entry "test" "1" >/dev/null 2>&1; then
+        printf '❌ Assertion failed: _select_account_entry failed on list index "1"\n' >&2
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+    assert_equals "Alpha" "$SELECTED_SERVICE"
+    assert_equals "user1" "$SELECTED_USERNAME"
+    assert_equals "p1" "$SELECTED_PASSWORD"
+    
+    if ! _select_account_entry "test" "2" >/dev/null 2>&1; then
+        printf '❌ Assertion failed: _select_account_entry failed on list index "2"\n' >&2
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+    assert_equals "Beta" "$SELECTED_SERVICE"
+    assert_equals "user2" "$SELECTED_USERNAME"
+    assert_equals "p2" "$SELECTED_PASSWORD"
+    
+    if ! _select_account_entry "test" "alpha" >/dev/null 2>&1; then
+        printf '❌ Assertion failed: _select_account_entry failed on service name "alpha"\n' >&2
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+    assert_equals "Alpha" "$SELECTED_SERVICE"
+    
+    rm -f "$TEMP_FILE"
+    printf 'OK\n'
+}
+
+test_crypto_hmac_tamper
+test_entry_selection_by_index
+
 echo "✅ All tests passed successfully!"

@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq openssl coreutils zip
+
+      - name: Run unit test suite
+        run: |
+          chmod +x test_kryptx.sh kryptx.sh
+          ./test_kryptx.sh
+
+      - name: Package Release Assets
+        id: package
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [[ "${TAG_NAME}" == "" || "${TAG_NAME}" == "main" || "${TAG_NAME}" == "master" ]]; then
+            TAG_NAME="v0.0.0-dev"
+          fi
+
+          ARCHIVE_NAME="kryptx-${TAG_NAME}"
+          DIST_DIR="dist"
+          mkdir -p "${DIST_DIR}"
+
+          # Copy project artifacts
+          cp kryptx.sh "${DIST_DIR}/kryptx"
+          cp LICENSE README.md SECURITY.md "${DIST_DIR}/"
+          chmod +x "${DIST_DIR}/kryptx"
+
+          # Create compressed archives
+          tar -czvf "${ARCHIVE_NAME}.tar.gz" -C "${DIST_DIR}" .
+          zip -r "${ARCHIVE_NAME}.zip" "${DIST_DIR}"/*
+
+          # Standalone executable file for direct download
+          cp kryptx.sh "kryptx"
+          chmod +x "kryptx"
+
+          # Generate SHA256 checksums file
+          sha256sum "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}.zip" "kryptx" > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            kryptx-*.tar.gz
+            kryptx-*.zip
+            kryptx
+            checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false
