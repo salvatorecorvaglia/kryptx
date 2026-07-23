@@ -105,8 +105,8 @@ test_crypto_roundtrip() {
     bundle=$(cat "$PASSWORD_FILE")
     stored_hmac="${bundle%%:*}"
     ct_b64="${bundle#*:}"
-    if [ -z "$stored_hmac" ]; then
-        printf '❌ Assertion failed: hmac was empty\n' >&2
+    if [ -z "$stored_hmac" ] || [ -z "$ct_b64" ]; then
+        printf '❌ Assertion failed: hmac or ciphertext payload was empty\n' >&2
         exit 1
     fi
     
