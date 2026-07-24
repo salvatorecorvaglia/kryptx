@@ -15,14 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq openssl coreutils zip
+          which jq openssl zip >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y jq openssl coreutils zip)
 
       - name: Run unit test suite
         run: |
@@ -46,9 +45,9 @@ jobs:
           cp LICENSE README.md SECURITY.md "${DIST_DIR}/"
           chmod +x "${DIST_DIR}/kryptx"
 
-          # Create compressed archives
+          # Create compressed archives (flat structure for both tar and zip)
           tar -czvf "${ARCHIVE_NAME}.tar.gz" -C "${DIST_DIR}" .
-          zip -r "${ARCHIVE_NAME}.zip" "${DIST_DIR}"/*
+          (cd "${DIST_DIR}" && zip -r "../${ARCHIVE_NAME}.zip" .)
 
           # Standalone executable file for direct download
           cp kryptx.sh "kryptx"
@@ -67,4 +66,5 @@ jobs:
             checksums.txt
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
