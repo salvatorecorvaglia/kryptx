@@ -150,6 +150,10 @@ Running test_entry_selection_by_index... OK
 
 ---
 
+## 🤝 Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
 ## 🔐 Security
 
 If you discover a security vulnerability, please see our [Security Policy](SECURITY.md).
