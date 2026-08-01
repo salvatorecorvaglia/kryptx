@@ -19,8 +19,8 @@ done
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # XDG Base Directory Specification paths
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kryptx"
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kryptx"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/custode"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/custode"
 
 # Ensure directories exist with strict permissions
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"
@@ -30,14 +30,14 @@ chmod 700 "$CONFIG_DIR" "$DATA_DIR" 2>/dev/null || true
 PASSWORD_FILE="$DATA_DIR/passwords.enc"
 
 # Audit log file
-AUDIT_LOG="$DATA_DIR/kryptx-audit.log"
+AUDIT_LOG="$DATA_DIR/custode-audit.log"
 
 # Temp file for decrypted data — prefer RAM-backed tmpfs to avoid disk writes
 TEMP_FILE=""
 TEMP_FILES_TO_CLEAN=()
 
 # Configuration file
-CONFIG_FILE="$CONFIG_DIR/kryptx-config.json"
+CONFIG_FILE="$CONFIG_DIR/custode-config.json"
 
 # Default password length
 DEFAULT_PASSWORD_LENGTH=16
@@ -109,7 +109,7 @@ secure_cleanup() {
 _make_tempfile() {
     local f
     if [ -d /dev/shm ] && [ -w /dev/shm ]; then
-        f=$(mktemp /dev/shm/kryptx.XXXXXXXXXX)
+        f=$(mktemp /dev/shm/custode.XXXXXXXXXX)
     else
         f=$(mktemp)
     fi
@@ -340,7 +340,7 @@ decrypt_file() {
 
 prompt_master_password() {
     local attempt=1
-    local lock_file="$DATA_DIR/.kryptx-lock"
+    local lock_file="$DATA_DIR/.custode-lock"
 
     # Enforce lockout based on lock file mtime
     if [ -f "$lock_file" ]; then
@@ -370,7 +370,7 @@ prompt_master_password() {
         fi
 
         # Derive HMAC key using PBKDF2 over a static seed
-        HMAC_KEY=$(echo -n "kryptx-hmac-key-seed-v1" | openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -nosalt -pass fd:3 3<<<"$MASTER_PASSWORD" 2>/dev/null | base64 | tr -d '\n')
+        HMAC_KEY=$(echo -n "custode-hmac-key-seed-v1" | openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -nosalt -pass fd:3 3<<<"$MASTER_PASSWORD" 2>/dev/null | base64 | tr -d '\n')
 
         if [ -f "$PASSWORD_FILE" ]; then
             # Try to decrypt; authenticate by HMAC match inside decrypt_file

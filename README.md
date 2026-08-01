@@ -1,4 +1,4 @@
-# kryptx 🔐
+# Custode 🔐
 
 **A lightweight, zero-dependency, highly secure terminal-based password manager written in Pure Bash.**
 
@@ -13,15 +13,15 @@
 - ⏱️ **Auto-Clearing Clipboard**: Automatically clears copied credentials from system clipboards (`pbcopy`, `xclip`, `wl-copy`) after a configurable timeout (default 30s).
 - 🚨 **Rate Limiting & Lockout**: Protects against brute-force attacks by enforcing a 5-minute lockout after 5 consecutive failed master password attempts.
 - 🎲 **Cryptographic Password Generator**: Generates strong, entropy-rich passwords tailored to custom length and character set criteria.
-- 📁 **XDG Base Directory Compliance**: Follows standard Unix paths (`$XDG_CONFIG_HOME/kryptx` and `$XDG_DATA_HOME/kryptx`).
-- 📜 **Security Audit Logging**: Maintains an encrypted-state timestamped event log (`kryptx-audit.log`) tracking authorization, lockouts, exports, and vault modifications.
+- 📁 **XDG Base Directory Compliance**: Follows standard Unix paths (`$XDG_CONFIG_HOME/custode` and `$XDG_DATA_HOME/custode`).
+- 📜 **Security Audit Logging**: Maintains an encrypted-state timestamped event log (`custode-audit.log`) tracking authorization, lockouts, exports, and vault modifications.
 - 📦 **JSON Import & Export**: Easily backup, restore, or migrate vaults with built-in duplicate detection and validation.
 
 ---
 
 ## 🔒 Security Architecture
 
-kryptx is engineered around defense-in-depth security practices:
+Custode is engineered around defense-in-depth security practices:
 
 | Component | Implementation Details |
 | :--- | :--- |
@@ -36,7 +36,7 @@ kryptx is engineered around defense-in-depth security practices:
 
 ## 📋 Prerequisites
 
-kryptx requires minimal standard Unix tools installed on your system:
+Custode requires minimal standard Unix tools installed on your system:
 
 - **Bash** (`>= 4.0`)
 - **OpenSSL** (`openssl` CLI)
@@ -54,31 +54,31 @@ For automatic clipboard copy-and-clear features:
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/salvatorecorvaglia/kryptx.git
-cd kryptx
+git clone https://github.com/salvatorecorvaglia/custode.git
+cd custode
 ```
 
 ### 2. Make Executable & Launch
 ```bash
-chmod +x kryptx.sh
-./kryptx.sh
+chmod +x custode.sh
+./custode.sh
 ```
 
 ### 3. (Optional) Install Globally or Create Alias
 Add an alias to your `~/.bashrc` or `~/.zshrc`:
 ```bash
-alias kryptx="$HOME/kryptx/kryptx.sh"
+alias custode="$HOME/custode/custode.sh"
 ```
 Or symlink to a bin directory in your `$PATH`:
 ```bash
-ln -s "$(pwd)/kryptx.sh" ~/.local/bin/kryptx
+ln -s "$(pwd)/custode.sh" ~/.local/bin/custode
 ```
 
 ---
 
 ## 📖 Usage & Features
 
-Upon launching `./kryptx.sh`, kryptx prompts for your **Master Password**. On first run, it initializes a new encrypted vault.
+Upon launching `./custode.sh`, Custode prompts for your **Master Password**. On first run, it initializes a new encrypted vault.
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -111,14 +111,14 @@ Upon launching `./kryptx.sh`, kryptx prompts for your **Master Password**. On fi
 
 ## 📂 Data & Configuration Storage
 
-kryptx complies with the **XDG Base Directory Specification**:
+Custode complies with the **XDG Base Directory Specification**:
 
 | Resource | Default Location | Description |
 | :--- | :--- | :--- |
-| **Config File** | `~/.config/kryptx/kryptx-config.json` | Stores user configuration settings |
-| **Encrypted Vault** | `~/.local/share/kryptx/passwords.enc` | HMAC-authenticated AES-256 encrypted payload |
-| **Audit Log** | `~/.local/share/kryptx/kryptx-audit.log` | Security audit trail |
-| **Lockout Marker** | `~/.local/share/kryptx/.kryptx-lock` | Temporary lock file created during security lockout |
+| **Config File** | `~/.config/custode/custode-config.json` | Stores user configuration settings |
+| **Encrypted Vault** | `~/.local/share/custode/passwords.enc` | HMAC-authenticated AES-256 encrypted payload |
+| **Audit Log** | `~/.local/share/custode/custode-audit.log` | Security audit trail |
+| **Lockout Marker** | `~/.local/share/custode/.custode-lock` | Temporary lock file created during security lockout |
 
 *All directories are created with strict permissions (`0700` / `rwx------`), and files are locked down (`0600` / `rw-------`).*
 
@@ -126,17 +126,17 @@ kryptx complies with the **XDG Base Directory Specification**:
 
 ## 🧪 Running Unit Tests
 
-kryptx comes with a comprehensive test suite covering password strength algorithms, HMAC integrity checks, tempfile sanitization, and encryption roundtrips.
+Custode comes with a comprehensive test suite covering password strength algorithms, HMAC integrity checks, tempfile sanitization, and encryption roundtrips.
 
 To execute the test suite:
 
 ```bash
-bash test_kryptx.sh
+bash test_custode.sh
 ```
 
 Example output:
 ```text
-🧪 Running kryptx unit tests...
+🧪 Running custode unit tests...
 Running test_password_strength_too_short... OK
 Running test_password_strength_weak_classes... OK
 Running test_password_strength_acceptable... OK

@@ -25,8 +25,8 @@ jobs:
 
       - name: Run unit test suite
         run: |
-          chmod +x test_kryptx.sh kryptx.sh
-          ./test_kryptx.sh
+          chmod +x test_custode.sh custode.sh
+          ./test_custode.sh
 
       - name: Extract Changelog & Set Release Info
         id: release_info
@@ -36,7 +36,7 @@ jobs:
             TAG_NAME="v0.0.0-dev"
           fi
 
-          echo "title=Kryptx ${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "title=Custode ${TAG_NAME}" >> $GITHUB_OUTPUT
 
           python3 - << 'EOF'
           import os, re
@@ -83,25 +83,25 @@ jobs:
             TAG_NAME="v0.0.0-dev"
           fi
 
-          ARCHIVE_NAME="kryptx-${TAG_NAME}"
+          ARCHIVE_NAME="custode-${TAG_NAME}"
           DIST_DIR="dist"
           mkdir -p "${DIST_DIR}"
 
           # Copy project artifacts
-          cp kryptx.sh "${DIST_DIR}/kryptx"
+          cp custode.sh "${DIST_DIR}/custode"
           cp LICENSE README.md SECURITY.md "${DIST_DIR}/"
-          chmod +x "${DIST_DIR}/kryptx"
+          chmod +x "${DIST_DIR}/custode"
 
           # Create compressed archives (flat structure for both tar and zip)
           tar -czvf "${ARCHIVE_NAME}.tar.gz" -C "${DIST_DIR}" .
           (cd "${DIST_DIR}" && zip -r "../${ARCHIVE_NAME}.zip" .)
 
           # Standalone executable file for direct download
-          cp kryptx.sh "kryptx"
-          chmod +x "kryptx"
+          cp custode.sh "custode"
+          chmod +x "custode"
 
           # Generate SHA256 checksums file
-          sha256sum "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}.zip" "kryptx" > checksums.txt
+          sha256sum "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}.zip" "custode" > checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -109,12 +109,10 @@ jobs:
           name: ${{ steps.release_info.outputs.title }}
           body_path: ${{ steps.release_info.outputs.body_path }}
           files: |
-            kryptx-*.tar.gz
-            kryptx-*.zip
-            kryptx
+            custode-*.tar.gz
+            custode-*.zip
+            custode
             checksums.txt
           generate_release_notes: ${{ steps.release_info.outputs.body_path == '' }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-
-

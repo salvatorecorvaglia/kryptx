@@ -1,13 +1,13 @@
-# Contributing to kryptx 🔐
+# Contributing to Custode 🔐
 
-Thank you for your interest in contributing to **kryptx**! We welcome contributions, bug reports, feature requests, and security improvements from the community.
+Thank you for your interest in contributing to **Custode**! We welcome contributions, bug reports, feature requests, and security improvements from the community.
 
 ---
 
 ## 🛠️ How to Contribute
 
 ### 1. Reporting Bugs
-- Search existing [Issues](https://github.com/salvatorecorvaglia/kryptx/issues) to ensure your bug hasn't already been reported.
+- Search existing [Issues](https://github.com/salvatorecorvaglia/custode/issues) to ensure your bug hasn't already been reported.
 - Open a new issue with a clear title, description, steps to reproduce, expected vs. actual behavior, and environment details (OS, Bash version, OpenSSL version, `jq` version).
 
 ### 2. Suggesting Features
@@ -18,8 +18,8 @@ Thank you for your interest in contributing to **kryptx**! We welcome contributi
 
 1. **Fork & Clone** the repository:
    ```bash
-   git clone https://github.com/YOUR-USERNAME/kryptx.git
-   cd kryptx
+   git clone https://github.com/YOUR-USERNAME/custode.git
+   cd custode
    ```
 
 2. **Create a Feature Branch**:
@@ -28,16 +28,16 @@ Thank you for your interest in contributing to **kryptx**! We welcome contributi
    ```
 
 3. **Make Your Changes**:
-   - Ensure your code adheres to ShellCheck linting rules (`shellcheck -x kryptx.sh test_kryptx.sh`).
+   - Ensure your code adheres to ShellCheck linting rules (`shellcheck -x custode.sh test_custode.sh`).
    - Keep scripts portable across macOS and Linux environment setups.
    - Maintain defense-in-depth security best practices (avoid logging secrets, avoid unquoted variables, ensure secure temp file creation and cleanup).
 
 4. **Run Tests**:
    - Run the test suite to verify everything passes:
      ```bash
-     ./test_kryptx.sh
+     ./test_custode.sh
      ```
-   - Add new tests in `test_kryptx.sh` for any new functionality or bug fixes.
+   - Add new tests in `test_custode.sh` for any new functionality or bug fixes.
 
 5. **Commit & Push**:
    - Write clear, concise commit messages.
@@ -54,7 +54,7 @@ Thank you for your interest in contributing to **kryptx**! We welcome contributi
 
 ## 📐 Coding & Style Guidelines
 
-- **Pure Bash**: kryptx is built strictly in Pure Bash (`bash >= 4.0`) using standard POSIX utilities (`openssl`, `jq`). Avoid introducing unnecessary external dependencies.
+- **Pure Bash**: Custode is built strictly in Pure Bash (`bash >= 4.0`) using standard POSIX utilities (`openssl`, `jq`). Avoid introducing unnecessary external dependencies.
 - **Linting**: All scripts must pass `shellcheck` cleanly.
 - **Security-First**:
   - Pass sensitive data via file descriptors or streams—never via process arguments (`/proc`, `ps`).
@@ -65,12 +65,12 @@ Thank you for your interest in contributing to **kryptx**! We welcome contributi
 
 ## 🧪 Testing Guidelines
 
-All unit tests are located in [test_kryptx.sh](test_kryptx.sh).
+All unit tests are located in [test_custode.sh](test_custode.sh).
 
 When adding a feature or bug fix:
-1. Add test functions in `test_kryptx.sh`.
+1. Add test functions in `test_custode.sh`.
 2. Follow the test pattern: mock temporary test directories, isolate credentials, and clean up test state.
-3. Ensure running `./test_kryptx.sh` outputs `✅ All tests passed successfully!`.
+3. Ensure running `./test_custode.sh` outputs `✅ All tests passed successfully!`.
 
 ---
 

@@ -36,8 +36,8 @@ jobs:
 
       - name: Validate Bash syntax
         run: |
-          bash -n kryptx.sh
-          bash -n test_kryptx.sh
+          bash -n custode.sh
+          bash -n test_custode.sh
 
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@2.0.0
@@ -69,6 +69,5 @@ jobs:
 
       - name: Run unit test suite
         run: |
-          chmod +x test_kryptx.sh kryptx.sh
-          ./test_kryptx.sh
-
+          chmod +x test_custode.sh custode.sh
+          ./test_custode.sh

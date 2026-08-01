@@ -1,6 +1,6 @@
 # Contributors 👥
 
-A huge thank you to everyone who has contributed to **kryptx**!
+A huge thank you to everyone who has contributed to **Custode**!
 
 ## ✨ Lead Maintainer
 

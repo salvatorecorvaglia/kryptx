@@ -8,7 +8,7 @@ prompt_master_password() { :; }
 main_menu() { :; }
 
 # Source target script
-source ./kryptx.sh
+source ./custode.sh
 
 # Simple assertion functions
 assert_equals() {
@@ -84,7 +84,7 @@ test_crypto_roundtrip() {
     printf 'Running test_crypto_roundtrip... '
     # Set up clean environment vars
     export MASTER_PASSWORD="supersecretpass"
-    HMAC_KEY=$(printf '%s' "kryptx-hmac-key-seed-v1" | openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -nosalt -pass fd:3 3<<<"$MASTER_PASSWORD" 2>/dev/null | base64 | tr -d '\n')
+    HMAC_KEY=$(printf '%s' "custode-hmac-key-seed-v1" | openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -nosalt -pass fd:3 3<<<"$MASTER_PASSWORD" 2>/dev/null | base64 | tr -d '\n')
     export HMAC_KEY
     
     export PASSWORD_FILE="./test_passwords.enc"
@@ -129,7 +129,7 @@ test_crypto_roundtrip() {
 }
 
 # Run all tests
-echo "🧪 Running kryptx unit tests..."
+echo "🧪 Running custode unit tests..."
 test_password_strength_too_short
 test_password_strength_weak_classes
 test_password_strength_acceptable
@@ -140,7 +140,7 @@ test_crypto_roundtrip
 test_crypto_hmac_tamper() {
     printf 'Running test_crypto_hmac_tamper... '
     export MASTER_PASSWORD="supersecretpass"
-    HMAC_KEY=$(printf '%s' "kryptx-hmac-key-seed-v1" | openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -nosalt -pass fd:3 3<<<"$MASTER_PASSWORD" 2>/dev/null | base64 | tr -d '\n')
+    HMAC_KEY=$(printf '%s' "custode-hmac-key-seed-v1" | openssl enc -aes-256-cbc -pbkdf2 -iter "$PBKDF2_ITER" -md sha256 -nosalt -pass fd:3 3<<<"$MASTER_PASSWORD" 2>/dev/null | base64 | tr -d '\n')
     export HMAC_KEY
     
     export PASSWORD_FILE="./test_tamper_passwords.enc"
